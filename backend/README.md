@@ -88,6 +88,54 @@ Apenas `admin` cria/edita/publica. Leitura é permitida a `admin`, `gestor`,
 `coordenador` e `coletor` (o app de campo precisa buscar a versão atual para
 renderizar o formulário).
 
+## Equipes: vincular usuários (`/teams/{id}/members`)
+
+Antes do RDA fazer sentido, um usuário (coletor ou coordenador) precisa
+pertencer a uma equipe:
+
+- `POST /teams/{id}/members` (admin) — `{"user_id": "..."}`
+- `GET /teams/{id}/members` (admin, gestor, coordenador)
+- `DELETE /teams/{id}/members/{user_id}` (admin)
+
+Coordenador pode estar em várias equipes (supervisiona mais de uma frente).
+
+## RDA: submissão, revisão e auditoria (Fase 3)
+
+Máquina de estados: `rascunho` → `enviado` → `em_revisao` → `aprovado` /
+`reprovado`. Um RDA reprovado volta a ser editável pelo coletor e pode ser
+reenviado.
+
+- As respostas (`answers`) são validadas contra o schema da
+  `FormTemplateVersion` referenciada: tipos, opções válidas para campos de
+  seleção, e — no envio — completude dos campos obrigatórios **ativos**
+  (lógica condicional é respeitada: um campo condicional só é exigido se a
+  condição for satisfeita pelas respostas atuais).
+- `original_answers` é gravado uma única vez, no primeiro envio, e nunca mais
+  é alterado — preserva o dado tal como coletado em campo mesmo que o
+  coordenador corrija `answers` depois.
+- Toda edição de `answers` pelo coordenador gera uma entrada em
+  `rda_audit_logs` com o diff campo a campo (`old_value`/`new_value`), quem
+  fez e um comentário opcional.
+- Aprovar/reprovar é sempre registrado (quem, quando, comentário/motivo).
+
+Endpoints principais (`/rdas`):
+
+- `POST /rdas` — cria rascunho (coletor, restrito à própria equipe; admin)
+- `GET /rdas?status_filter=&contract_id=&team_id=` — lista **com escopo por
+  papel**: admin/gestor veem tudo; coordenador só RDAs das equipes onde está
+  vinculado; coletor só os próprios
+- `GET /rdas/{id}` / `GET /rdas/{id}/audit-log`
+- `PATCH /rdas/{id}/answers` — coletor (dono, só em rascunho/reprovado) ou
+  coordenador/admin (só em enviado/em_revisao)
+- `POST /rdas/{id}/submit` — coletor dono, valida obrigatoriedade
+- `POST /rdas/{id}/start-review` — coordenador vinculado à equipe, ou admin
+- `POST /rdas/{id}/approve` / `POST /rdas/{id}/reject` — idem, reject exige
+  `reason`
+
+A restrição "coordenador só vê/aprova RDAs do(s) seu(s) contrato(s)/equipe(s)"
+(pendente desde a Fase 1) está implementada aqui via a tabela
+`team_assignments`.
+
 ## Papéis (roles)
 
 `admin`, `gestor`, `coordenador`, `coletor`, `convidado` — ver seção 7 da

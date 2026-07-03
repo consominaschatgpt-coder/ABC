@@ -7,7 +7,7 @@ os.environ.setdefault("SECRET_KEY", "test-secret-key")
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, insert
 from sqlalchemy.orm import sessionmaker
 
 from app.core.config import settings
@@ -16,8 +16,9 @@ from app.db.base import Base
 from app.db.session import get_db
 from app.main import app
 from app.models.contract import Contract
+from app.models.form_template import FormTemplate, FormTemplateVersion
 from app.models.organization import Organization
-from app.models.team import Team
+from app.models.team import Team, team_assignments
 from app.models.user import Role, User
 
 engine = create_engine(settings.database_url)
@@ -112,6 +113,71 @@ def coletor_user(db_session, organization):
         password="senha123",
         role=Role.COLETOR,
     )
+
+
+@pytest.fixture
+def coordenador_user(db_session, organization):
+    return make_user(
+        db_session,
+        organization,
+        email="coordenador@consominas.com",
+        password="senha123",
+        role=Role.COORDENADOR,
+    )
+
+
+def assign_to_team(db_session, user, team):
+    db_session.execute(
+        insert(team_assignments).values(user_id=user.id, team_id=team.id)
+    )
+    db_session.commit()
+
+
+@pytest.fixture
+def coletor_in_team(db_session, coletor_user, team):
+    assign_to_team(db_session, coletor_user, team)
+    return coletor_user
+
+
+@pytest.fixture
+def coordenador_in_team(db_session, coordenador_user, team):
+    assign_to_team(db_session, coordenador_user, team)
+    return coordenador_user
+
+
+@pytest.fixture
+def published_form_version(db_session, contract):
+    template = FormTemplate(name="RDA Teste", contract_id=contract.id)
+    db_session.add(template)
+    db_session.flush()
+
+    version = FormTemplateVersion(
+        template_id=template.id,
+        version_number=1,
+        is_published=True,
+        schema=[
+            {
+                "key": "houve_atividade",
+                "label": "Houve atividade?",
+                "type": "selecao_unica",
+                "required": True,
+                "options": ["sim", "nao"],
+            },
+            {
+                "key": "tipo_supressao",
+                "label": "Tipo de supressao",
+                "type": "selecao_unica",
+                "required": True,
+                "options": ["Fauna", "Flora"],
+                "condition": {"field": "houve_atividade", "equals": "sim"},
+            },
+            {"key": "observacoes", "label": "Observacoes", "type": "texto", "required": False},
+        ],
+    )
+    db_session.add(version)
+    db_session.commit()
+    db_session.refresh(version)
+    return version
 
 
 def auth_headers(client, email, password):

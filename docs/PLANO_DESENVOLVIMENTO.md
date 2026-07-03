@@ -78,4 +78,5 @@ Baseado em `Especificacao_Tecnica_RDA_Campo.docx` (Grupo Consominas Engenharia).
 - [x] Fase 0 — estrutura do monorepo criada
 - [x] Fase 1 — backend: hierarquia de dados, autenticação JWT, CRUD, testes
 - [x] Fase 2 — construtor de formulários (FormTemplate versionado, lógica condicional)
-- [ ] Fase 3 — em andamento
+- [x] Fase 3 — RDA: submissão, máquina de estados, edição auditada, aprovação/reprovação
+- [ ] Fase 4 — em andamento

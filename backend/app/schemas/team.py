@@ -14,3 +14,7 @@ class TeamRead(BaseModel):
     id: uuid.UUID
     name: str
     contract_id: uuid.UUID
+
+
+class TeamMemberAdd(BaseModel):
+    user_id: uuid.UUID
