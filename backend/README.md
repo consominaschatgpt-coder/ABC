@@ -53,13 +53,40 @@ pytest
 app/
   core/       # config, segurança (hash, JWT)
   db/         # engine, sessão, base declarativa
-  models/     # SQLAlchemy: Organization, Contract, Team, User
+  models/     # SQLAlchemy: Organization, Contract, Team, User, FormTemplate/Version
   schemas/    # Pydantic: request/response
-  api/routes/ # endpoints (auth, organizations, contracts, teams, users)
+  api/routes/ # endpoints (auth, organizations, contracts, teams, users, form_templates)
 alembic/      # migrations
 scripts/      # utilitários (seed do admin inicial)
 tests/        # pytest
 ```
+
+## Construtor de formulários (Fase 2)
+
+`FormTemplate` é o modelo de RDA de um contrato; cada edição gera uma nova
+`FormTemplateVersion` **imutável** (o conteúdo dos campos não muda depois de
+criada). Apenas uma versão pode estar `is_published=True` por vez — é essa a
+versão "atual" que a equipe de campo preenche. RDAs (Fase 3) vão referenciar
+o `version_id` específico, então editar/publicar uma nova versão nunca
+quebra RDAs já preenchidos com a versão anterior.
+
+Tipos de campo suportados: `texto`, `numero`, `data_hora`, `selecao_unica`,
+`selecao_multipla`, `foto`, `assinatura`, `localizacao`. Campos de seleção
+exigem `options`; qualquer campo pode ter `condition` (`{"field": "...",
+"equals": "..."}`) para lógica condicional simples.
+
+Endpoints principais:
+
+- `POST /form-templates` — cria o template + versão 1 (rascunho)
+- `GET /form-templates?contract_id=` — lista templates
+- `GET /form-templates/{id}` — detalhe + versão publicada atual
+- `GET /form-templates/{id}/versions` — histórico de versões (rascunhos e publicadas)
+- `POST /form-templates/{id}/versions` — nova versão (rascunho)
+- `POST /form-templates/{id}/versions/{version_id}/publish` — publica uma versão (despublica a anterior)
+
+Apenas `admin` cria/edita/publica. Leitura é permitida a `admin`, `gestor`,
+`coordenador` e `coletor` (o app de campo precisa buscar a versão atual para
+renderizar o formulário).
 
 ## Papéis (roles)
 
