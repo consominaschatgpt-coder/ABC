@@ -83,10 +83,13 @@ Endpoints principais:
 - `GET /form-templates/{id}/versions` — histórico de versões (rascunhos e publicadas)
 - `POST /form-templates/{id}/versions` — nova versão (rascunho)
 - `POST /form-templates/{id}/versions/{version_id}/publish` — publica uma versão (despublica a anterior)
+- `GET /form-template-versions/{version_id}` — busca uma versão direto pelo
+  id, sem precisar do template (útil quando só se tem o
+  `form_template_version_id`, ex.: a partir de um RDA)
 
 Apenas `admin` cria/edita/publica. Leitura é permitida a `admin`, `gestor`,
-`coordenador` e `coletor` (o app de campo precisa buscar a versão atual para
-renderizar o formulário).
+`coordenador` e `coletor` (o app/painel de campo precisa listar e buscar a
+versão atual para renderizar o formulário).
 
 ## Equipes: vincular usuários (`/teams/{id}/members`)
 
@@ -135,6 +138,16 @@ Endpoints principais (`/rdas`):
 A restrição "coordenador só vê/aprova RDAs do(s) seu(s) contrato(s)/equipe(s)"
 (pendente desde a Fase 1) está implementada aqui via a tabela
 `team_assignments`.
+
+Também usado pelo painel web: `GET /users/me/teams` retorna as equipes do
+usuário logado (essencial para o coletor saber em qual equipe está antes de
+criar um RDA — ele não tem acesso a `GET /teams`, que lista todas).
+
+## CORS
+
+`app/core/config.py` tem `cors_origins` (lista, padrão inclui
+`localhost:5173`/`127.0.0.1:5173` para o painel web em dev). Ajuste via env
+var `CORS_ORIGINS` ou direto no `.env` para produção.
 
 ## Papéis (roles)
 

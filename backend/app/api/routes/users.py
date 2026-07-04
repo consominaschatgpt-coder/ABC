@@ -7,7 +7,9 @@ from sqlalchemy.orm import Session
 from app.api.deps import get_current_user, require_roles
 from app.core.security import hash_password
 from app.db.session import get_db
+from app.models.team import Team
 from app.models.user import Role, User
+from app.schemas.team import TeamRead
 from app.schemas.user import UserCreate, UserRead
 
 router = APIRouter(prefix="/users", tags=["users"])
@@ -39,6 +41,11 @@ def create_user(
 @router.get("/me", response_model=UserRead)
 def read_current_user(current_user: User = Depends(get_current_user)) -> User:
     return current_user
+
+
+@router.get("/me/teams", response_model=list[TeamRead])
+def read_current_user_teams(current_user: User = Depends(get_current_user)) -> list[Team]:
+    return current_user.teams
 
 
 @router.get("", response_model=list[UserRead])

@@ -134,3 +134,19 @@ def test_coletor_can_read_but_not_create(client, admin_user, coletor_user, contr
         headers=coletor_headers,
     )
     assert create_response.status_code == 403
+
+
+def test_get_version_by_id_without_template_context(client, admin_user, contract):
+    headers = auth_headers(client, "admin@consominas.com", "senha-forte-123")
+    create = client.post(
+        "/form-templates",
+        json={"name": "RDA MRN", "contract_id": str(contract.id), "fields": BASIC_FIELDS},
+        headers=headers,
+    )
+    template_id = create.json()["id"]
+    versions = client.get(f"/form-templates/{template_id}/versions", headers=headers).json()
+    version_id = versions[0]["id"]
+
+    response = client.get(f"/form-template-versions/{version_id}", headers=headers)
+    assert response.status_code == 200
+    assert response.json()["id"] == version_id

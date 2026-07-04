@@ -18,6 +18,7 @@ from app.schemas.form_template import (
 )
 
 router = APIRouter(prefix="/form-templates", tags=["form-templates"])
+version_router = APIRouter(tags=["form-templates"])
 
 READ_ROLES = (Role.ADMIN, Role.GESTOR, Role.COORDENADOR, Role.COLETOR)
 
@@ -59,7 +60,7 @@ def create_form_template(
 def list_form_templates(
     contract_id: uuid.UUID | None = None,
     db: Session = Depends(get_db),
-    _=Depends(require_roles(Role.ADMIN, Role.GESTOR, Role.COORDENADOR)),
+    _=Depends(require_roles(*READ_ROLES)),
 ) -> list[FormTemplate]:
     query = select(FormTemplate)
     if contract_id is not None:
@@ -155,4 +156,18 @@ def publish_form_template_version(
     version.published_at = datetime.now(timezone.utc)
     db.commit()
     db.refresh(version)
+    return version
+
+
+@version_router.get("/form-template-versions/{version_id}", response_model=FormTemplateVersionRead)
+def get_form_template_version_by_id(
+    version_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    _=Depends(require_roles(*READ_ROLES)),
+) -> FormTemplateVersion:
+    """Busca uma versao diretamente pelo id, sem precisar saber o template.
+    Util quando so se tem o form_template_version_id (ex.: a partir de um RDA)."""
+    version = db.get(FormTemplateVersion, version_id)
+    if version is None:
+        raise HTTPException(status_code=404, detail="Versao de formulario nao encontrada")
     return version

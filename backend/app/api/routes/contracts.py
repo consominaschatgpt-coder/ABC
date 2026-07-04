@@ -38,7 +38,7 @@ def list_contracts(
 def get_contract(
     contract_id: uuid.UUID,
     db: Session = Depends(get_db),
-    _=Depends(require_roles(Role.ADMIN, Role.GESTOR, Role.COORDENADOR)),
+    _=Depends(require_roles(Role.ADMIN, Role.GESTOR, Role.COORDENADOR, Role.COLETOR)),
 ) -> Contract:
     contract = db.get(Contract, contract_id)
     if contract is None:
