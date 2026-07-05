@@ -169,8 +169,11 @@ apague o atalho `RodarBotTimesheet` em
 - Se nao tiver certeza do Centro de custo, mostra ate' 3 opcoes parecidas
   numeradas pra voce escolher (responde so' com o numero) - util quando
   voce nao lembra o nome exato ou o audio saiu com um nome estranho.
-- Nao preenche **Rateio** pela mensagem - se precisar, ajuste direto no
-  `lancamentos_timesheet.csv` depois.
+- Entende **Rateio** se voce mencionar por ultimo na mensagem, ex: `"3h
+  PROPOSTA rateio state grid"`. Casa contra os rateios cadastrados em
+  `catalogo_opcoes.csv` (tipo `rateio`) com o mesmo algoritmo do Centro de
+  custo. Se nao achar com confianca, deixa sem rateio e avisa - ajuste
+  direto no `lancamentos_timesheet.csv` se precisar.
 - Se passar `LIMITE_HORAS_SEM_LANCAR` (24h por padrao) sem nenhum
   lancamento novo, ele manda um lembrete uma vez - e volta a poder avisar
   de novo se ficar 24h parado outra vez.

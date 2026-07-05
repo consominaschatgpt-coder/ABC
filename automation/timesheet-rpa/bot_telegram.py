@@ -126,6 +126,19 @@ def remover_horas(texto: str) -> str:
     return limpar(re.sub(r"\s+", " ", texto))
 
 
+def extrair_rateio(texto: str) -> Tuple[str, str]:
+    """
+    Se a mensagem mencionar "rateio" (ex: "... rateio state grid"), extrai
+    o texto depois dessa palavra como a descrição do rateio. Mencione o
+    rateio por último na mensagem (depois do centro de custo). Retorna
+    (texto_do_rateio_ou_vazio, texto_sem_esse_trecho).
+    """
+    m = re.search(r"\brateio\b[:\s]*(.*)$", texto, re.IGNORECASE)
+    if m and limpar(m.group(1)):
+        return limpar(m.group(1)), limpar(texto[:m.start()])
+    return "", texto
+
+
 def mes_ano_de(d: date) -> str:
     return f"{d.year} - {MESES[d.month - 1]}"
 
@@ -326,8 +339,9 @@ def start(message):
         "\"preencher\" - eu abro o navegador escondido e faço sozinho.\n\n"
         "Também aceito áudio - manda gravando \"4 horas ontem ADM "
         "Marketing\" que eu transcrevo e processo igual.\n\n"
-        "Por enquanto não preencho Rateio pela mensagem - se precisar, "
-        "ajuste direto no lancamentos_timesheet.csv."
+        "Se tiver rateio, menciona por último na mensagem: \"3h PROPOSTA "
+        "rateio state grid\". Se não achar com certeza, deixo sem rateio "
+        "e aviso."
     )
 
 
@@ -401,6 +415,13 @@ def processar_texto_lancamento(message, texto: str) -> None:
         bot.reply_to(message, "Entendi as horas, mas não achei o centro de custo. Manda de novo com o nome dele.")
         return
 
+    rateio_texto, resto = extrair_rateio(resto)
+    if not resto:
+        bot.reply_to(message, "Entendi as horas e o rateio, mas não achei o centro de custo. Manda de novo com o nome dele.")
+        return
+
+    rateio_escolhido, rateio_aviso = resolver_rateio(rateio_texto)
+
     opcoes_centro = nomes_do_tipo(catalogo, "centro_custo")
     centro_escolhido, score_centro = melhor_correspondencia(opcoes_centro, resto)
 
@@ -421,6 +442,7 @@ def processar_texto_lancamento(message, texto: str) -> None:
             "dia": dia,
             "horas": horas,
             "observacao": resto,
+            "rateio": rateio_escolhido,
             "opcoes": [nome for nome, _ in candidatos],
         }
 
@@ -433,7 +455,27 @@ def processar_texto_lancamento(message, texto: str) -> None:
         )
         return
 
-    propor_lancamento(message, mes, dia, centro_escolhido, score_centro, horas, resto)
+    propor_lancamento(message, mes, dia, centro_escolhido, score_centro, horas, resto, rateio_escolhido, rateio_aviso)
+
+
+def resolver_rateio(rateio_texto: str) -> Tuple[str, str]:
+    """
+    Tenta achar o rateio mencionado no catalogo. Retorna (rateio_escolhido
+    ou "", aviso ou "" pra mostrar na confirmacao quando nao achar).
+    """
+    if not rateio_texto:
+        return "", ""
+
+    opcoes_rateio = nomes_do_tipo(catalogo, "rateio")
+    rateio_escolhido, score_rateio = melhor_correspondencia(opcoes_rateio, rateio_texto)
+
+    if rateio_escolhido and score_rateio >= LIMIAR_CONFIANCA:
+        return rateio_escolhido, ""
+
+    return "", (
+        f"Não achei com certeza o rateio \"{rateio_texto}\" - deixei sem rateio, "
+        "ajuste direto no lancamentos_timesheet.csv se precisar."
+    )
 
 
 def escolher_centro_por_numero(message, numero: int) -> None:
@@ -448,28 +490,37 @@ def escolher_centro_por_numero(message, numero: int) -> None:
         return
 
     centro_escolhido = opcoes[numero - 1]
-    propor_lancamento(message, dados["mes"], dados["dia"], centro_escolhido, 1.0, dados["horas"], dados["observacao"])
+    propor_lancamento(
+        message, dados["mes"], dados["dia"], centro_escolhido, 1.0,
+        dados["horas"], dados["observacao"], dados.get("rateio", ""), "",
+    )
 
 
-def propor_lancamento(message, mes: str, dia: str, centro_custo: str, score_centro: float, horas: str, observacao: str) -> None:
+def propor_lancamento(message, mes: str, dia: str, centro_custo: str, score_centro: float,
+                       horas: str, observacao: str, rateio: str = "", rateio_aviso: str = "") -> None:
     pendentes[message.chat.id] = {
         "mes": mes,
         "dia": dia,
         "centro_custo": centro_custo,
         "centro_custo_busca": busca_para_nome(catalogo, "centro_custo", centro_custo),
-        "rateio": "",
-        "rateio_busca": "",
+        "rateio": rateio,
+        "rateio_busca": busca_para_nome(catalogo, "rateio", rateio) if rateio else "",
         "horas": horas,
         "observacao": observacao,
     }
+
+    linha_rateio = f"Rateio: {rateio}\n" if rateio else ""
+    aviso = f"\n{rateio_aviso}\n" if rateio_aviso else ""
 
     bot.reply_to(
         message,
         f"Entendi:\n"
         f"Dia {dia} de {mes}\n"
         f"Centro de custo: {centro_custo} ({score_centro:.0%} de parecença)\n"
+        f"{linha_rateio}"
         f"Horas: {horas[:2]}:{horas[2:]}\n"
-        f"Observação: {observacao}\n\n"
+        f"Observação: {observacao}\n"
+        f"{aviso}\n"
         "Confirma? (sim/não)"
     )
 
