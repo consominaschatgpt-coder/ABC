@@ -20,8 +20,6 @@ Importante:
 """
 
 import csv
-import difflib
-import re
 import time
 from datetime import datetime
 from pathlib import Path
@@ -29,6 +27,8 @@ from typing import Dict, List, Optional, Tuple
 
 import duckdb
 from playwright.sync_api import sync_playwright, Page
+
+from matching import limpar, score_similaridade, termo_busca_padrao
 
 
 URL = "https://consominas.vindula.net/"
@@ -47,69 +47,6 @@ TEMPO_MAXIMO_LOGIN_SEGUNDOS = 180
 
 class SelecaoInsegura(Exception):
     pass
-
-
-def limpar(texto: str) -> str:
-    return (texto or "").strip()
-
-
-def simplificar(texto: str) -> str:
-    texto = limpar(texto).lower()
-    texto = texto.replace("_", " ")
-    texto = re.sub(r"[^\wÀ-ÿ/.\- ]+", " ", texto)
-    texto = re.sub(r"\s+", " ", texto)
-    return texto.strip()
-
-
-def extrair_codigos(texto: str) -> set:
-    """
-    Numeros/codigos de contrato, OS ou ano que aparecem no texto (ex: "20.022/2020",
-    "001/2024"). Usado para não confundir opções quase idênticas que só diferem
-    no código - ex: "AMG CT 20.022/2020 - OS 001/2024" e "... OS 002/2024"
-    têm 0.97 de parecença de texto, mas são contratos/OS diferentes.
-    """
-    return set(re.findall(r"\d+(?:[./-]\d+)*", simplificar(texto)))
-
-
-def score_similaridade(a: str, b: str) -> float:
-    a_s = simplificar(a)
-    b_s = simplificar(b)
-    if not a_s or not b_s:
-        return 0.0
-
-    if a_s == b_s:
-        return 1.0
-
-    if a_s in b_s or b_s in a_s:
-        return 0.92
-
-    base = difflib.SequenceMatcher(None, a_s, b_s).ratio()
-
-    codigos_a = extrair_codigos(a)
-    codigos_b = extrair_codigos(b)
-    if codigos_a and codigos_b and codigos_a != codigos_b:
-        # Mesmo prefixo/texto parecido, mas numero de contrato/OS/ano diferente -
-        # penaliza bastante para não arriscar lançar no contrato/OS errado só
-        # por parecença de texto (só entra aqui quando NÃO é caso de busca
-        # abreviada/prefixo, que já foi resolvido acima pelo "in").
-        base *= 0.5
-
-    return base
-
-
-def termo_busca_padrao(valor: str) -> str:
-    valor = limpar(valor)
-    if not valor:
-        return ""
-
-    partes = [p.strip() for p in valor.split("-") if p.strip()]
-    if len(partes) >= 2:
-        palavras = partes[1].split()
-        if palavras:
-            return " ".join(palavras[:2])
-
-    palavras = valor.split()
-    return " ".join(palavras[:2])
 
 
 def agora() -> str:

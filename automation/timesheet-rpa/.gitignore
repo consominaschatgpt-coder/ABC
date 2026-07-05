@@ -4,4 +4,6 @@ perfil_timesheet_robo/
 relatorio_execucao.csv
 log_execucao_timesheet.csv
 *.duckdb
+telegram_token.txt
+telegram_chat_id.txt
 __pycache__/

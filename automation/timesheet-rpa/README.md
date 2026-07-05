@@ -93,6 +93,53 @@ novo.
 - **`README_PASSO_A_PASSO.txt`**: passo a passo original da v6 (a logica
   de fluxo e' a mesma na v7; mudou o matching e a forma de nao precisar de
   ENTER).
+- **`matching.py`**: logica de comparacao de texto (usada tanto pelo robo
+  quanto pelo bot do Telegram), pra garantir que os dois entendam o Centro
+  de custo/Rateio exatamente do mesmo jeito.
+- **`bot_telegram.py`**: bot que recebe mensagem tipo `"4h ADM Marketing"`,
+  confirma o que entendeu e grava direto em `lancamentos_timesheet.csv`.
+  Veja a secao abaixo.
+
+## Bot do Telegram (lançar hora por mensagem)
+
+Em vez de editar o CSV na mao, da pra mandar uma mensagem no Telegram tipo
+`"4h ADM Marketing"` e o bot grava o lancamento pra voce, depois de
+confirmar. Ele usa o mesmo algoritmo de comparacao do robo (`matching.py`)
+pra achar o Centro de custo certo no `catalogo_opcoes.csv`.
+
+**Configurar (uma vez):**
+
+1. No Telegram, procure `@BotFather`, mande `/newbot`, escolha um nome e
+   um username terminado em "bot". Ele devolve um **token**.
+2. Crie o arquivo `telegram_token.txt` nesta pasta, com só o token dentro
+   (sem espacos ou linhas extras).
+3. No Telegram, procure `@userinfobot`, mande qualquer mensagem, ele
+   devolve seu **chat_id** (um numero).
+4. Crie o arquivo `telegram_chat_id.txt` nesta pasta, com só esse numero.
+
+Os dois arquivos (`telegram_token.txt`, `telegram_chat_id.txt`) sao
+ignorados pelo git - sao segredos pessoais, nunca devem ser commitados.
+
+**Rodar:**
+
+```bash
+python bot_telegram.py
+```
+
+Deixe rodando (numa janela de terminal aberta) e manda mensagem pro bot.
+Ele so' responde pro `chat_id` configurado - qualquer outra pessoa que
+achar o bot e' ignorada.
+
+**Limitacoes desta primeira versao (MVP):**
+
+- So' funciona enquanto o script estiver rodando no seu PC (nao e' 24/7
+  ainda - isso e' um proximo passo, depois de validar o uso no dia a dia).
+- Sempre lanca pra **hoje** (ainda nao entende "ontem" ou uma data
+  especifica).
+- Nao preenche **Rateio** pela mensagem - se precisar, ajuste direto no
+  `lancamentos_timesheet.csv` depois.
+- A partir das 18h, se voce ainda nao lancou nada no dia, ele manda um
+  lembrete uma vez (`HORA_LEMBRETE` no topo do arquivo).
 
 ## Formato do CSV de lancamentos
 
@@ -124,7 +171,9 @@ No topo de `robo_timesheet_v7.py`:
 
 - Ampliar `catalogo_opcoes.csv` conforme aparecerem centros de
   custo/rateios novos na intranet.
-- Trocar/complementar o CSV por Excel (`openpyxl` ja esta nas
-  dependencias) quando fizer sentido digitar menos.
-- Depois de validar com mais semanas reais, pensar na camada de IA (texto
-  ou audio no celular) para gerar as linhas do CSV automaticamente.
+- Validar o bot do Telegram no dia a dia (v1: so' Centro de custo + horas,
+  sem Rateio, sempre pra hoje).
+- Deixar o bot rodando 24/7 (hoje so' funciona com o script aberto no PC) -
+  precisa decidir onde hospedar sem custo mensal.
+- Disparo automatico do robo (ex: toda sexta a noite) depois que o bot
+  estiver validado, fechando o ciclo sem precisar abrir o terminal.
