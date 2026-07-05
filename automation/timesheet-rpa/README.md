@@ -143,10 +143,24 @@ Deixe rodando (numa janela de terminal aberta) e manda mensagem pro bot.
 Ele so' responde pro `chat_id` configurado - qualquer outra pessoa que
 achar o bot e' ignorada.
 
+Se voce mandar mensagem/audio com o PC desligado ou o bot fechado, o
+Telegram guarda em espera - assim que o bot ligar de novo (mesmo no dia
+seguinte), ele recebe tudo que ficou pendente.
+
+**Ligar o bot sozinho quando o Windows iniciar:**
+
+Da 2 cliques em `INSTALAR_INICIO_AUTOMATICO.bat` **uma vez**. Isso cria um
+atalho na pasta de Inicializacao do Windows apontando pro `RODAR_BOT.bat`
+- da proxima vez que voce ligar o PC (ou fizer login no Windows), o bot
+abre sozinho (minimizado), sem precisar clicar em nada. Pra desfazer,
+apague o atalho `RodarBotTimesheet` em
+`%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup`.
+
 **Limitacoes desta primeira versao (MVP):**
 
-- So' funciona enquanto o script estiver rodando no seu PC (nao e' 24/7
-  ainda - isso e' um proximo passo, depois de validar o uso no dia a dia).
+- So' funciona enquanto o script estiver rodando no seu PC (nao e' 24/7 -
+  se o PC estiver desligado, o bot nao roda; use o instalador acima pra
+  pelo menos nao precisar ligar manualmente toda vez que o PC iniciar).
 - Lanca pra **hoje** por padrao, mas entende data se voce mencionar na
   mensagem: `"ontem"`, `"anteontem"`, `"dia 3"` ou uma data tipo `"03/07"`
   ou `"03/07/2026"` (ex: `"4h ontem ADM Marketing"`).
