@@ -169,6 +169,15 @@ No topo de `robo_timesheet_v7.py`:
   marca o lancamento como erro em vez de salvar algo errado.
 - `SALVAR_AUTOMATICAMENTE = True`: coloque `False` para o robo preencher
   tudo e parar antes de clicar em Salvar (util pra conferir sem lancar).
+- `NAVEGADOR_ESCONDIDO = True`: navegador roda invisivel (headless). So'
+  funciona bem porque a sessao de login ja fica salva em
+  `perfil_timesheet_robo/` de uma execucao visivel anterior - se a sessao
+  expirar um dia, nao tem tela pra logar de novo, entao rode com
+  `NAVEGADOR_ESCONDIDO = False` uma vez pra relogar.
+- `MODO_SILENCIOSO = True`: no terminal, mostra so' uma barra de
+  progresso (`[####------] 40% (8/20) ...`) em vez dos logs tecnicos
+  passo a passo. Os detalhes tecnicos continuam sendo gravados em
+  `debug_execucao.log`, pra investigar se algo der erro.
 
 ## Proximos passos
 

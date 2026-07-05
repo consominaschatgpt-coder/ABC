@@ -20,6 +20,7 @@ Importante:
 """
 
 import csv
+import sys
 import time
 from datetime import datetime
 from pathlib import Path
@@ -36,6 +37,7 @@ ARQUIVO_LANCAMENTOS = "lancamentos_timesheet.csv"
 ARQUIVO_CATALOGO = "catalogo_opcoes.csv"
 BANCO_DUCKDB = "timesheet_robo.duckdb"
 LOG_EXECUCAO = "log_execucao_timesheet.csv"
+ARQUIVO_DEBUG = "debug_execucao.log"
 PERFIL_NAVEGADOR = "perfil_timesheet_robo"
 CANAL_NAVEGADOR = "msedge"
 
@@ -43,6 +45,25 @@ LIMIAR_CONFIANCA = 0.70
 SALVAR_AUTOMATICAMENTE = True
 ESPERA_CARREGAR_RATEIO_MS = 3000
 TEMPO_MAXIMO_LOGIN_SEGUNDOS = 180
+
+# Navegador escondido e so' uma barrinha de progresso no terminal, em vez
+# dos logs tecnicos passo a passo (que continuam sendo gravados em
+# ARQUIVO_DEBUG, caso precise investigar algum erro depois).
+NAVEGADOR_ESCONDIDO = True
+MODO_SILENCIOSO = True
+
+_stdout_real = sys.stdout
+
+
+def _barra_progresso(atual: int, total: int, rotulo: str = "") -> None:
+    largura = 30
+    fracao = (atual / total) if total else 1.0
+    preenchido = int(largura * fracao)
+    barra = "#" * preenchido + "-" * (largura - preenchido)
+    pct = int(100 * fracao)
+    linha = f"\r[{barra}] {pct:3d}% ({atual}/{total}) {rotulo}"
+    _stdout_real.write(linha.ljust(90))
+    _stdout_real.flush()
 
 
 class SelecaoInsegura(Exception):
@@ -623,17 +644,18 @@ def lancar(page: Page, linha: Dict[str, str]) -> None:
 def main() -> None:
     inicializar_banco()
     lancamentos = obter_lancamentos_pendentes()
+    total = len(lancamentos)
 
     print("Robô Local De Timesheet - Versão 7")
-    print(f"Lançamentos pendentes: {len(lancamentos)}")
+    print(f"Lançamentos pendentes: {total}")
     print(f"Limiar de confiança: {LIMIAR_CONFIANCA:.0%}")
-    print(f"Salvar automaticamente: {SALVAR_AUTOMATICAMENTE}")
+    print(f"Navegador escondido: {NAVEGADOR_ESCONDIDO}")
 
     with sync_playwright() as p:
         try:
             contexto = p.chromium.launch_persistent_context(
                 user_data_dir=PERFIL_NAVEGADOR,
-                headless=False,
+                headless=NAVEGADOR_ESCONDIDO,
                 channel=CANAL_NAVEGADOR,
                 viewport={"width": 1600, "height": 900},
                 slow_mo=80,
@@ -642,7 +664,7 @@ def main() -> None:
             print("Não consegui abrir Edge. Abrindo Chromium.")
             contexto = p.chromium.launch_persistent_context(
                 user_data_dir=PERFIL_NAVEGADOR,
-                headless=False,
+                headless=NAVEGADOR_ESCONDIDO,
                 viewport={"width": 1600, "height": 900},
                 slow_mo=80,
             )
@@ -650,24 +672,50 @@ def main() -> None:
         page = contexto.new_page()
         page.goto(URL, wait_until="domcontentloaded")
 
+        # Login fica sempre visivel no terminal (se a sessao um dia expirar,
+        # precisa aparecer o aviso pra voce perceber e resolver).
         aguardar_login(page)
         abrir_timesheet(page)
 
-        for linha in lancamentos:
-            try:
-                lancar(page, linha)
-            except Exception as erro:
-                erro_txt = str(erro)
-                print(f"ERRO NO LANÇAMENTO {linha['id']}: {erro_txt}")
-                escrever_log(int(linha["id"]), "erro", erro_txt)
-                atualizar_status(int(linha["id"]), "erro", erro_txt)
-                tentar_cancelar_ou_voltar(page)
-                page.wait_for_timeout(1000)
-                continue
+        erros: List[Dict[str, str]] = []
+        debug_arquivo = None
 
-        print("\nProcesso finalizado.")
-        print(f"Veja o log em: {LOG_EXECUCAO}")
-        print(f"Veja o banco em: {BANCO_DUCKDB}")
+        if MODO_SILENCIOSO:
+            print("\nProcessando... (detalhes tecnicos ficam so' em "
+                  f"{ARQUIVO_DEBUG}, aqui so' mostro o progresso)\n")
+            debug_arquivo = open(ARQUIVO_DEBUG, "a", encoding="utf-8")
+            debug_arquivo.write(f"\n===== Execução {agora()} =====\n")
+            sys.stdout = debug_arquivo
+
+        try:
+            for i, linha in enumerate(lancamentos, start=1):
+                if MODO_SILENCIOSO:
+                    _barra_progresso(i - 1, total, f"Dia {linha['dia']} - {linha['centro_custo']}")
+
+                try:
+                    lancar(page, linha)
+                except Exception as erro:
+                    erro_txt = str(erro)
+                    print(f"ERRO NO LANÇAMENTO {linha['id']}: {erro_txt}")
+                    escrever_log(int(linha["id"]), "erro", erro_txt)
+                    atualizar_status(int(linha["id"]), "erro", erro_txt)
+                    erros.append({"dia": linha["dia"], "centro_custo": linha["centro_custo"], "erro": erro_txt})
+                    tentar_cancelar_ou_voltar(page)
+                    page.wait_for_timeout(1000)
+
+                if MODO_SILENCIOSO:
+                    _barra_progresso(i, total, f"Dia {linha['dia']} - {linha['centro_custo']}")
+        finally:
+            if MODO_SILENCIOSO:
+                sys.stdout = _stdout_real
+                debug_arquivo.close()
+
+        print("\n\nProcesso finalizado.")
+        print(f"Lançados: {total - len(erros)}/{total}")
+        if erros:
+            print(f"Com erro: {len(erros)} (veja detalhes em {ARQUIVO_DEBUG} e {LOG_EXECUCAO})")
+            for item in erros:
+                print(f"  - Dia {item['dia']} ({item['centro_custo']}): {item['erro']}")
 
         contexto.close()
 
