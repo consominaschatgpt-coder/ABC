@@ -6,7 +6,11 @@ Foco:
 - Sem ENTER a cada lançamento.
 - Vários lançamentos no mesmo dia.
 - Base local DuckDB.
-- Fuzzy match com limite mínimo de 70%.
+- Fuzzy match com limite mínimo de 70%, penalizando parecença de texto
+  quando o número de contrato/OS/ano é diferente (evita confundir opções
+  quase idênticas, ex: "OS 001/2024" com "OS 002/2024").
+- Espera adaptativa pelo carregamento do Rateio (não trava no tempo
+  máximo fixo quando a tela responde mais rápido).
 - Log de execução.
 - Não salva quando a confiança da seleção for baixa.
 
@@ -57,6 +61,16 @@ def simplificar(texto: str) -> str:
     return texto.strip()
 
 
+def extrair_codigos(texto: str) -> set:
+    """
+    Numeros/codigos de contrato, OS ou ano que aparecem no texto (ex: "20.022/2020",
+    "001/2024"). Usado para não confundir opções quase idênticas que só diferem
+    no código - ex: "AMG CT 20.022/2020 - OS 001/2024" e "... OS 002/2024"
+    têm 0.97 de parecença de texto, mas são contratos/OS diferentes.
+    """
+    return set(re.findall(r"\d+(?:[./-]\d+)*", simplificar(texto)))
+
+
 def score_similaridade(a: str, b: str) -> float:
     a_s = simplificar(a)
     b_s = simplificar(b)
@@ -69,7 +83,18 @@ def score_similaridade(a: str, b: str) -> float:
     if a_s in b_s or b_s in a_s:
         return 0.92
 
-    return difflib.SequenceMatcher(None, a_s, b_s).ratio()
+    base = difflib.SequenceMatcher(None, a_s, b_s).ratio()
+
+    codigos_a = extrair_codigos(a)
+    codigos_b = extrair_codigos(b)
+    if codigos_a and codigos_b and codigos_a != codigos_b:
+        # Mesmo prefixo/texto parecido, mas numero de contrato/OS/ano diferente -
+        # penaliza bastante para não arriscar lançar no contrato/OS errado só
+        # por parecença de texto (só entra aqui quando NÃO é caso de busca
+        # abreviada/prefixo, que já foi resolvido acima pelo "in").
+        base *= 0.5
+
+    return base
 
 
 def termo_busca_padrao(valor: str) -> str:
@@ -315,6 +340,20 @@ def selecionar_mes(page: Page, mes: str) -> None:
 def aguardar_botao_adicionar(page: Page) -> None:
     page.get_by_text("Adicionar hora", exact=False).first.wait_for(state="visible", timeout=15000)
     page.wait_for_timeout(500)
+
+
+def aguardar_rateio_carregar(page: Page) -> None:
+    """
+    Depois de escolher o Centro de custo, a tela busca no servidor os
+    Rateios validos para ele. Em vez de sempre esperar o tempo fixo
+    (ESPERA_CARREGAR_RATEIO_MS), espera so' ate a rede ficar ociosa -
+    normalmente mais rapido - com o mesmo tempo maximo como teto de
+    seguranca se a rede nao ficar ociosa a tempo.
+    """
+    try:
+        page.wait_for_load_state("networkidle", timeout=ESPERA_CARREGAR_RATEIO_MS)
+    except Exception:
+        pass
 
 
 def preparar_lancamento(page: Page, mes: str) -> None:
@@ -623,7 +662,7 @@ def lancar(page: Page, linha: Dict[str, str]) -> None:
 
     selecionado_rateio = ""
     if linha["rateio"]:
-        page.wait_for_timeout(ESPERA_CARREGAR_RATEIO_MS)
+        aguardar_rateio_carregar(page)
         selecionado_rateio = selecionar_lista_inteligente(
             page,
             "Rateio",

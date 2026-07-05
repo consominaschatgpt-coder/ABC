@@ -11,6 +11,24 @@ incluindo os dois casos com rateio dependente do Centro de custo
 ("PROPOSTA" com dois rateios diferentes), sem precisar apertar ENTER
 nenhuma vez durante a execucao.
 
+Depois dessa validacao, foram feitos dois ajustes em cima do que ja
+funcionava (sem mexer no fluxo comprovado):
+
+- **Mais assertividade**: o catalogo tem varios contratos/OS quase
+  identicos no texto, diferindo so' no numero (ex: `AMG CT 20.022/2020 -
+  OS 001/2024` vs `... OS 002/2024`, ou `MRN CT 4336/2026` vs `... 4337/2026`).
+  O algoritmo antigo dava ate 0.97 de parecenca entre esses pares -
+  perigosamente acima do limiar de 70%, ou seja, arriscava lancar no
+  contrato/OS errado so' por parecenca de texto. Agora o score penaliza
+  quando o numero de contrato/OS/ano e' diferente, derrubando esses pares
+  para 0.35-0.48 (abaixo do limiar), sem afetar os casos legitimos de
+  busca abreviada que ja funcionavam (ex: `MRN CT 4343` continua achando
+  `MRN CT 4343/2026` com 0.92).
+- **Mais rapido**: a espera fixa de 3s antes de abrir o Rateio (pra dar
+  tempo da tela buscar as opcoes validas para o Centro de custo escolhido)
+  virou uma espera adaptativa - so' espera o tempo maximo quando a rede
+  realmente demora, e segue na hora quando carrega mais rapido.
+
 ## Como funciona
 
 1. Abre `https://consominas.vindula.net/` no Edge.
