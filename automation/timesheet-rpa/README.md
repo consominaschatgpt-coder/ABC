@@ -138,8 +138,11 @@ achar o bot e' ignorada.
   especifica).
 - Nao preenche **Rateio** pela mensagem - se precisar, ajuste direto no
   `lancamentos_timesheet.csv` depois.
-- A partir das 18h, se voce ainda nao lancou nada no dia, ele manda um
-  lembrete uma vez (`HORA_LEMBRETE` no topo do arquivo).
+- Se passar `LIMITE_HORAS_SEM_LANCAR` (24h por padrao) sem nenhum
+  lancamento novo, ele manda um lembrete uma vez - e volta a poder avisar
+  de novo se ficar 24h parado outra vez.
+- O robo (`robo_timesheet_v7.py`) continua manual - roda quando voce
+  clicar no `RODAR_ROBO.bat`, sem disparo automatico.
 
 ## Formato do CSV de lancamentos
 

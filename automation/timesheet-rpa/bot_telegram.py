@@ -13,8 +13,10 @@ Limitações desta primeira versão (MVP):
 - Sempre lança pra hoje (não dá pra dizer "ontem" ainda).
 - Não preenche Rateio pela mensagem (deixe em branco e ajuste no CSV se
   precisar de rateio nesse lançamento).
-- O lembrete diário só funciona enquanto este script estiver rodando no
-  seu PC.
+- O lembrete (se passar 24h sem nenhum lançamento novo) só funciona
+  enquanto este script estiver rodando no seu PC.
+- O robô (robo_timesheet_v7.py) continua manual - roda quando você
+  quiser, clicando no RODAR_ROBO.bat.
 
 Configuração (2 arquivos locais, fora do git - veja README.md):
 - telegram_token.txt: token do bot, do @BotFather
@@ -41,7 +43,7 @@ ARQUIVO_CHAT_ID = "telegram_chat_id.txt"
 ARQUIVO_CATALOGO = "catalogo_opcoes.csv"
 ARQUIVO_LANCAMENTOS = "lancamentos_timesheet.csv"
 
-HORA_LEMBRETE = 18  # a partir dessa hora, cobra se ainda não lançou nada hoje
+LIMITE_HORAS_SEM_LANCAR = 24  # avisa se passar desse tempo sem nenhum lançamento novo
 
 MESES = [
     "Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho",
@@ -130,19 +132,18 @@ def gravar_lancamento(mes: str, dia: str, centro_custo: str, centro_custo_busca:
         w.writerow([mes, dia, centro_custo, centro_custo_busca, rateio, rateio_busca, horas, observacao])
 
 
-def ja_lancou_hoje() -> bool:
-    if not Path(ARQUIVO_LANCAMENTOS).exists():
-        return False
+def horas_desde_ultimo_lancamento() -> Optional[float]:
+    """
+    Usa a data de modificacao do proprio CSV como "ultima vez que alguem
+    lancou algo" - toda confirmacao no bot acrescenta uma linha nele, entao
+    o mtime do arquivo sempre reflete o lancamento mais recente.
+    """
+    p = Path(ARQUIVO_LANCAMENTOS)
+    if not p.exists():
+        return None
 
-    mes_hoje = mes_ano_atual()
-    dia_hoje = dia_atual()
-
-    with open(ARQUIVO_LANCAMENTOS, "r", encoding="utf-8-sig", newline="") as f:
-        for linha in csv.DictReader(f):
-            if limpar(linha.get("mes", "")) == mes_hoje and limpar(linha.get("dia", "")).zfill(2) == dia_hoje:
-                return True
-
-    return False
+    ultima_modificacao = datetime.fromtimestamp(p.stat().st_mtime)
+    return (datetime.now() - ultima_modificacao).total_seconds() / 3600
 
 
 TOKEN = ler_arquivo_config(ARQUIVO_TOKEN, "o token do bot (@BotFather)")
@@ -244,27 +245,26 @@ def confirmar_pendente(message) -> None:
 
 
 def loop_lembrete() -> None:
-    avisado_hoje = False
-    ultimo_dia_checado = None
+    ja_avisado = False
 
     while True:
-        agora = datetime.now()
+        horas = horas_desde_ultimo_lancamento()
 
-        if ultimo_dia_checado != agora.date():
-            avisado_hoje = False
-            ultimo_dia_checado = agora.date()
-
-        if agora.hour >= HORA_LEMBRETE and not avisado_hoje:
-            if not ja_lancou_hoje():
+        if horas is not None and horas >= LIMITE_HORAS_SEM_LANCAR:
+            if not ja_avisado:
                 try:
                     bot.send_message(
                         CHAT_ID_PERMITIDO,
-                        "Você ainda não lançou nenhuma hora hoje no Timesheet. "
-                        "Bora lançar? Manda tipo \"4h ADM Marketing\".",
+                        f"Já faz mais de {LIMITE_HORAS_SEM_LANCAR}h que você não lança nada no "
+                        "Timesheet. Bora lançar? Manda tipo \"4h ADM Marketing\".",
                     )
                 except Exception:
                     pass
-            avisado_hoje = True
+                ja_avisado = True
+        else:
+            # Voltou a lancar (ou ainda nao passou do limite) - reseta pra
+            # poder avisar de novo se ficar 24h parado outra vez.
+            ja_avisado = False
 
         time_module.sleep(600)
 
