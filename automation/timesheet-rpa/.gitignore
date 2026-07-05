@@ -1,3 +1,4 @@
 perfil_timesheet/
+perfil_timesheet_robo/
 *.local.csv
 __pycache__/

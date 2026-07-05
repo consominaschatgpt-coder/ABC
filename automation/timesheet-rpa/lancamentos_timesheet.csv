@@ -1,3 +1,3 @@
-mes,dia,centro_custo,rateio,horas,observacao
-2026 - Julho,01,PROPOSTA,PROPOSTA - Acompanhamento de Propostas,0800,Acompanhamento de propostas e organizacao das informacoes comerciais.
-2026 - Julho,02,ADM Atividades Adm,,0400,Apoio administrativo e organizacao de demandas internas.
+mes,dia,centro_custo,centro_custo_busca,rateio,rateio_busca,horas,observacao
+2026 - Julho,01,PROPOSTA,PROP,PROPOSTA - Acompanhamento de Propostas,Acompanhamento,0800,Acompanhamento de propostas e organização das informações comerciais.
+2026 - Julho,02,ADM Atividades Adm,ADM Atividades,,,0400,Apoio administrativo e organização de demandas internas.
