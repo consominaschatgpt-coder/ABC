@@ -56,7 +56,10 @@ def ler_arquivo_config(caminho: str, nome_amigavel: str) -> str:
             f"Falta o arquivo {caminho} com {nome_amigavel}. Crie esse arquivo "
             f"(so' com o valor dentro, sem espacos/linhas extras) na mesma pasta do bot."
         )
-    return limpar(p.read_text(encoding="utf-8"))
+    # utf-8-sig: no Windows/PowerShell, arquivos de texto costumam ser
+    # salvos com um BOM (marca invisivel no inicio); sem isso aqui, o token
+    # vinha com esse caractere colado na frente e quebrava o bot.
+    return limpar(p.read_text(encoding="utf-8-sig"))
 
 
 def carregar_catalogo() -> Dict[str, List[Dict[str, str]]]:
