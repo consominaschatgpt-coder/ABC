@@ -14,6 +14,11 @@ navegador (escondido) e lance no Timesheet de verdade tudo que estiver
 pendente no CSV. Roda no mesmo processo do bot - so' um programa rodando,
 sempre ligado, recebendo mensagens e preenchendo quando voce mandar.
 
+Tambem aceita audio: manda um audio tipo "4 horas ontem ADM Marketing"
+que o bot transcreve (Whisper local, sem custo) e processa igual a uma
+mensagem de texto. Na primeira vez que usar audio, ele baixa o modelo de
+voz (uns 150MB) - pode demorar um pouco.
+
 Limitações desta primeira versão (MVP):
 - Não preenche Rateio pela mensagem (deixe em branco e ajuste no CSV se
   precisar de rateio nesse lançamento).
@@ -39,6 +44,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 import telebot
+from faster_whisper import WhisperModel
 
 from matching import limpar, melhor_correspondencia, termo_busca_padrao, LIMIAR_CONFIANCA
 import robo_timesheet_v7
@@ -49,6 +55,11 @@ ARQUIVO_CATALOGO = "catalogo_opcoes.csv"
 ARQUIVO_LANCAMENTOS = "lancamentos_timesheet.csv"
 
 LIMITE_HORAS_SEM_LANCAR = 24  # avisa se passar desse tempo sem nenhum lançamento novo
+
+MODELO_WHISPER = "base"  # troque para "small" se quiser mais precisao (mais lento)
+ARQUIVO_AUDIO_TEMP = "audio_temp.ogg"
+
+_modelo_whisper = None  # carregado so' na primeira vez que um audio chegar
 
 MESES = [
     "Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho",
@@ -176,6 +187,20 @@ def gravar_lancamento(mes: str, dia: str, centro_custo: str, centro_custo_busca:
         w.writerow([mes, dia, centro_custo, centro_custo_busca, rateio, rateio_busca, horas, observacao])
 
 
+def obter_modelo_whisper() -> WhisperModel:
+    global _modelo_whisper
+    if _modelo_whisper is None:
+        print(f"Carregando modelo de voz (Whisper '{MODELO_WHISPER}') - so' na primeira vez...")
+        _modelo_whisper = WhisperModel(MODELO_WHISPER, device="cpu", compute_type="int8")
+    return _modelo_whisper
+
+
+def transcrever_audio(caminho: str) -> str:
+    modelo = obter_modelo_whisper()
+    segmentos, _ = modelo.transcribe(caminho, language="pt")
+    return limpar(" ".join(seg.text for seg in segmentos))
+
+
 def horas_desde_ultimo_lancamento() -> Optional[float]:
     """
     Usa a data de modificacao do proprio CSV como "ultima vez que alguem
@@ -267,6 +292,8 @@ def start(message):
         "\"03/07\".\n\n"
         "Quando quiser mandar tudo pro Timesheet de verdade, manda "
         "\"preencher\" - eu abro o navegador escondido e faço sozinho.\n\n"
+        "Também aceito áudio - manda gravando \"4 horas ontem ADM "
+        "Marketing\" que eu transcrevo e processo igual.\n\n"
         "Por enquanto não preencho Rateio pela mensagem - se precisar, "
         "ajuste direto no lancamentos_timesheet.csv."
     )
@@ -293,6 +320,38 @@ def receber_mensagem(message):
         threading.Thread(target=preencher_timesheet, args=(message.chat.id,), daemon=True).start()
         return
 
+    processar_texto_lancamento(message, texto)
+
+
+@bot.message_handler(content_types=["voice", "audio"])
+def receber_audio(message):
+    if not usuario_autorizado(message):
+        return
+
+    arquivo_id = message.voice.file_id if message.content_type == "voice" else message.audio.file_id
+
+    try:
+        info_arquivo = bot.get_file(arquivo_id)
+        dados = bot.download_file(info_arquivo.file_path)
+
+        caminho_temp = Path(f"{message.chat.id}_{ARQUIVO_AUDIO_TEMP}")
+        caminho_temp.write_bytes(dados)
+
+        texto = transcrever_audio(str(caminho_temp))
+        caminho_temp.unlink(missing_ok=True)
+    except Exception as erro:
+        bot.reply_to(message, f"Não consegui processar o áudio: {erro}")
+        return
+
+    if not texto:
+        bot.reply_to(message, "Não consegui entender nada no áudio. Tenta falar de novo ou manda por texto.")
+        return
+
+    bot.reply_to(message, f"Entendi do áudio: \"{texto}\"")
+    processar_texto_lancamento(message, texto)
+
+
+def processar_texto_lancamento(message, texto: str) -> None:
     mes, dia, texto_sem_data = extrair_data(texto)
 
     horas = extrair_horas(texto_sem_data)

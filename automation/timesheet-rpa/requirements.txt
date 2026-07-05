@@ -3,3 +3,4 @@ duckdb
 pandas
 openpyxl
 pyTelegramBotAPI
+faster-whisper

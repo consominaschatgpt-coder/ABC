@@ -113,6 +113,13 @@ Quando quiser mandar tudo pro Timesheet de verdade, manda **`preencher`**
 processo, e preenche tudo sozinho, avisando o resultado quando terminar.
 Nao precisa de um segundo programa pra isso.
 
+Tambem aceita **audio**: grava algo tipo *"4 horas ontem ADM Marketing"*
+e manda como audio no Telegram - o bot transcreve com Whisper local
+(`faster-whisper`, roda no seu PC, sem custo por uso) e processa igual a
+uma mensagem de texto, te mostrando o que entendeu antes de confirmar. Na
+primeira vez que usar audio, baixa o modelo de voz (uns 150MB) - so'
+acontece uma vez.
+
 **Configurar (uma vez):**
 
 1. No Telegram, procure `@BotFather`, mande `/newbot`, escolha um nome e

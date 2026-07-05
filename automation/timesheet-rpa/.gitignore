@@ -7,4 +7,5 @@ log_execucao_timesheet.csv
 debug_execucao.log
 telegram_token.txt
 telegram_chat_id.txt
+*_audio_temp.ogg
 __pycache__/
