@@ -100,12 +100,18 @@ novo.
   confirma o que entendeu e grava direto em `lancamentos_timesheet.csv`.
   Veja a secao abaixo.
 
-## Bot do Telegram (lançar hora por mensagem)
+## Bot do Telegram (lançar hora por mensagem + preencher o Timesheet)
 
-Em vez de editar o CSV na mao, da pra mandar uma mensagem no Telegram tipo
+Esse e' o unico programa que voce precisa deixar ligado no dia a dia. Em
+vez de editar o CSV na mao, manda uma mensagem no Telegram tipo
 `"4h ADM Marketing"` e o bot grava o lancamento pra voce, depois de
 confirmar. Ele usa o mesmo algoritmo de comparacao do robo (`matching.py`)
 pra achar o Centro de custo certo no `catalogo_opcoes.csv`.
+
+Quando quiser mandar tudo pro Timesheet de verdade, manda **`preencher`**
+(ou `atualizar`) pro bot - ele abre o navegador escondido, no mesmo
+processo, e preenche tudo sozinho, avisando o resultado quando terminar.
+Nao precisa de um segundo programa pra isso.
 
 **Configurar (uma vez):**
 
@@ -142,8 +148,12 @@ achar o bot e' ignorada.
 - Se passar `LIMITE_HORAS_SEM_LANCAR` (24h por padrao) sem nenhum
   lancamento novo, ele manda um lembrete uma vez - e volta a poder avisar
   de novo se ficar 24h parado outra vez.
-- O robo (`robo_timesheet_v7.py`) continua manual - roda quando voce
-  clicar no `RODAR_ROBO.bat`, sem disparo automatico.
+- Preencher (`"preencher"`/`"atualizar"`) so' funciona um de cada vez - se
+  mandar de novo enquanto um ja esta rodando, ele avisa e ignora.
+- Se a sessao de login expirar (raro, mas pode acontecer), o "preencher"
+  nao consegue resolver sozinho (nao tem tela pra logar) - nesse caso,
+  rode `RODAR_ROBO.bat` manualmente uma vez (esse sim abre visivel) pra
+  logar de novo.
 
 ## Formato do CSV de lancamentos
 
@@ -170,11 +180,9 @@ No topo de `robo_timesheet_v7.py`:
   marca o lancamento como erro em vez de salvar algo errado.
 - `SALVAR_AUTOMATICAMENTE = True`: coloque `False` para o robo preencher
   tudo e parar antes de clicar em Salvar (util pra conferir sem lancar).
-- `NAVEGADOR_ESCONDIDO = True`: navegador roda invisivel (headless). So'
-  funciona bem porque a sessao de login ja fica salva em
-  `perfil_timesheet_robo/` de uma execucao visivel anterior - se a sessao
-  expirar um dia, nao tem tela pra logar de novo, entao rode com
-  `NAVEGADOR_ESCONDIDO = False` uma vez pra relogar.
+- Navegador visivel ou escondido: `RODAR_ROBO.bat` sempre abre visivel
+  (pra servir de conserto manual se a sessao de login expirar); o
+  "preencher" disparado pelo bot do Telegram sempre roda escondido.
 - `MODO_SILENCIOSO = True`: no terminal, mostra so' uma barra de
   progresso (`[####------] 40% (8/20) ...`) em vez dos logs tecnicos
   passo a passo. Os detalhes tecnicos continuam sendo gravados em

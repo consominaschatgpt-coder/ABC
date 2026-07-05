@@ -9,13 +9,18 @@ Fluxo:
 - Confirmando, grava uma nova linha em lancamentos_timesheet.csv - o mesmo
   arquivo que o robo_timesheet_v7.py lê para preencher o Timesheet de verdade.
 
+Manda "preencher" (ou "atualizar") pro bot quando quiser que ele abra o
+navegador (escondido) e lance no Timesheet de verdade tudo que estiver
+pendente no CSV. Roda no mesmo processo do bot - so' um programa rodando,
+sempre ligado, recebendo mensagens e preenchendo quando voce mandar.
+
 Limitações desta primeira versão (MVP):
 - Não preenche Rateio pela mensagem (deixe em branco e ajuste no CSV se
   precisar de rateio nesse lançamento).
-- O lembrete (se passar 24h sem nenhum lançamento novo) só funciona
-  enquanto este script estiver rodando no seu PC.
-- O robô (robo_timesheet_v7.py) continua manual - roda quando você
-  quiser, clicando no RODAR_ROBO.bat.
+- O lembrete (se passar 24h sem nenhum lançamento novo) e o "preencher"
+  só funcionam enquanto este script estiver rodando no seu PC.
+- Só um preenchimento por vez - se mandar "preencher" de novo enquanto
+  o anterior ainda esta rodando, ele avisa e ignora.
 
 Configuração (2 arquivos locais, fora do git - veja README.md):
 - telegram_token.txt: token do bot, do @BotFather
@@ -36,6 +41,7 @@ from typing import Dict, List, Optional, Tuple
 import telebot
 
 from matching import limpar, melhor_correspondencia, termo_busca_padrao, LIMIAR_CONFIANCA
+import robo_timesheet_v7
 
 ARQUIVO_TOKEN = "telegram_token.txt"
 ARQUIVO_CHAT_ID = "telegram_chat_id.txt"
@@ -193,9 +199,58 @@ catalogo = carregar_catalogo()
 # Guarda a ultima proposta feita para cada chat, esperando confirmacao.
 pendentes: Dict[int, Dict[str, str]] = {}
 
+# Trava simples pra nao rodar dois preenchimentos ao mesmo tempo.
+preenchendo = threading.Lock()
+
 
 def usuario_autorizado(message) -> bool:
     return str(message.chat.id) == CHAT_ID_PERMITIDO
+
+
+def preencher_timesheet(chat_id: int) -> None:
+    if not preenchendo.acquire(blocking=False):
+        bot.send_message(chat_id, "Já tem um preenchimento rodando, aguenta ele terminar.")
+        return
+
+    try:
+        bot.send_message(chat_id, "Beleza, abrindo o Timesheet e preenchendo (escondido). Aguenta um pouco...")
+        resumo = robo_timesheet_v7.executar(headless=True, modo_automatico=True)
+    except robo_timesheet_v7.LoginNaoDetectado:
+        bot.send_message(
+            chat_id,
+            "Não consegui confirmar o login na intranet (sessão pode ter expirado). "
+            "Roda o RODAR_ROBO.bat manualmente uma vez pra logar de novo.",
+        )
+        return
+    except Exception as erro:
+        bot.send_message(chat_id, f"Deu erro rodando o robô: {erro}")
+        return
+    finally:
+        preenchendo.release()
+
+    if resumo.get("falha_login"):
+        bot.send_message(
+            chat_id,
+            "Não consegui confirmar o login na intranet (sessão pode ter expirado). "
+            "Roda o RODAR_ROBO.bat manualmente uma vez pra logar de novo.",
+        )
+        return
+
+    total = resumo["total"]
+    lancados = resumo["lancados"]
+    erros = resumo["erros"]
+
+    if total == 0:
+        bot.send_message(chat_id, "Não tinha nada pendente pra lançar.")
+        return
+
+    texto = f"Pronto! Lançados {lancados}/{total}."
+    if erros:
+        texto += f"\nCom erro: {len(erros)}"
+        for item in erros[:5]:
+            texto += f"\n  - Dia {item['dia']} ({item['centro_custo']}): {item['erro']}"
+
+    bot.send_message(chat_id, texto)
 
 
 @bot.message_handler(commands=["start", "ajuda"])
@@ -210,6 +265,8 @@ def start(message):
         "Se não disser o dia, lanço pra hoje. Pra outro dia, inclua na "
         "mensagem: \"ontem\", \"anteontem\", \"dia 3\" ou uma data tipo "
         "\"03/07\".\n\n"
+        "Quando quiser mandar tudo pro Timesheet de verdade, manda "
+        "\"preencher\" - eu abro o navegador escondido e faço sozinho.\n\n"
         "Por enquanto não preencho Rateio pela mensagem - se precisar, "
         "ajuste direto no lancamentos_timesheet.csv."
     )
@@ -230,6 +287,10 @@ def receber_mensagem(message):
     if texto_lower in ("não", "nao", "n", "cancela", "cancelar"):
         pendentes.pop(message.chat.id, None)
         bot.reply_to(message, "Beleza, descartei. Manda de novo quando quiser.")
+        return
+
+    if texto_lower in ("preencher", "atualizar", "/preencher", "/atualizar"):
+        threading.Thread(target=preencher_timesheet, args=(message.chat.id,), daemon=True).start()
         return
 
     mes, dia, texto_sem_data = extrair_data(texto)
@@ -284,7 +345,7 @@ def confirmar_pendente(message) -> None:
         return
 
     gravar_lancamento(**dados)
-    bot.reply_to(message, "Lançado no CSV. Quando quiser, rode o robô pra mandar pro Timesheet de verdade.")
+    bot.reply_to(message, "Lançado no CSV. Quando quiser, manda \"preencher\" pra eu mandar tudo pro Timesheet de verdade.")
 
 
 def loop_lembrete() -> None:

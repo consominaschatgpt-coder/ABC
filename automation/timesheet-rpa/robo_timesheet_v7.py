@@ -46,10 +46,10 @@ SALVAR_AUTOMATICAMENTE = True
 ESPERA_CARREGAR_RATEIO_MS = 3000
 TEMPO_MAXIMO_LOGIN_SEGUNDOS = 180
 
-# Navegador escondido e so' uma barrinha de progresso no terminal, em vez
-# dos logs tecnicos passo a passo (que continuam sendo gravados em
-# ARQUIVO_DEBUG, caso precise investigar algum erro depois).
-NAVEGADOR_ESCONDIDO = True
+# So' uma barrinha de progresso no terminal, em vez dos logs tecnicos
+# passo a passo (que continuam sendo gravados em ARQUIVO_DEBUG, caso
+# precise investigar algum erro depois). Vale tanto para RODAR_ROBO.bat
+# (visivel) quanto para o "preencher" disparado pelo bot (escondido).
 MODO_SILENCIOSO = True
 
 _stdout_real = sys.stdout
@@ -216,7 +216,11 @@ def escrever_log(id_lancamento: int, status: str, mensagem: str, extra: str = ""
         w.writerow([agora(), id_lancamento, status, mensagem, extra])
 
 
-def aguardar_login(page: Page) -> None:
+class LoginNaoDetectado(Exception):
+    pass
+
+
+def aguardar_login(page: Page, modo_automatico: bool = False) -> None:
     print("Aguardando login manual na intranet...")
 
     limite = time.time() + TEMPO_MAXIMO_LOGIN_SEGUNDOS
@@ -239,6 +243,15 @@ def aguardar_login(page: Page) -> None:
         time.sleep(1)
 
     print("Não consegui detectar o login automaticamente.")
+
+    if modo_automatico:
+        # Disparado pelo bot (sem ninguem olhando o terminal) - nao da pra
+        # esperar ENTER. Avisa quem chamou pra pedir pra rodar manualmente.
+        raise LoginNaoDetectado(
+            "Sessao expirada ou login nao detectado - preciso que voce rode "
+            "manualmente (RODAR_ROBO.bat) pra logar de novo."
+        )
+
     input("Se você já está logado, pressione ENTER para continuar...")
 
 
@@ -641,7 +654,21 @@ def lancar(page: Page, linha: Dict[str, str]) -> None:
     atualizar_status(id_l, "lancado", "")
 
 
-def main() -> None:
+def executar(headless: bool = False, modo_automatico: Optional[bool] = None) -> Dict[str, object]:
+    """
+    Roda o robo do inicio ao fim e devolve um resumo (dict) em vez de so'
+    imprimir no terminal - usado pelo bot do Telegram pra disparar o
+    preenchimento a partir do mesmo processo (headless=True) e reportar o
+    resultado de volta pro chat. RODAR_ROBO.bat chama com headless=False,
+    servindo de via manual pra logar de novo se a sessao expirar.
+
+    Se modo_automatico nao for informado, assume o mesmo valor de
+    'headless' (rodar escondido normalmente significa rodar sem ninguem
+    olhando, entao nao da pra esperar ENTER se o login nao for detectado).
+    """
+    if modo_automatico is None:
+        modo_automatico = headless
+
     inicializar_banco()
     lancamentos = obter_lancamentos_pendentes()
     total = len(lancamentos)
@@ -649,13 +676,18 @@ def main() -> None:
     print("Robô Local De Timesheet - Versão 7")
     print(f"Lançamentos pendentes: {total}")
     print(f"Limiar de confiança: {LIMIAR_CONFIANCA:.0%}")
-    print(f"Navegador escondido: {NAVEGADOR_ESCONDIDO}")
+    print(f"Navegador escondido: {headless}")
+
+    resumo: Dict[str, object] = {"total": total, "lancados": 0, "erros": [], "falha_login": False}
+
+    if total == 0:
+        return resumo
 
     with sync_playwright() as p:
         try:
             contexto = p.chromium.launch_persistent_context(
                 user_data_dir=PERFIL_NAVEGADOR,
-                headless=NAVEGADOR_ESCONDIDO,
+                headless=headless,
                 channel=CANAL_NAVEGADOR,
                 viewport={"width": 1600, "height": 900},
                 slow_mo=80,
@@ -664,7 +696,7 @@ def main() -> None:
             print("Não consegui abrir Edge. Abrindo Chromium.")
             contexto = p.chromium.launch_persistent_context(
                 user_data_dir=PERFIL_NAVEGADOR,
-                headless=NAVEGADOR_ESCONDIDO,
+                headless=headless,
                 viewport={"width": 1600, "height": 900},
                 slow_mo=80,
             )
@@ -674,7 +706,14 @@ def main() -> None:
 
         # Login fica sempre visivel no terminal (se a sessao um dia expirar,
         # precisa aparecer o aviso pra voce perceber e resolver).
-        aguardar_login(page)
+        try:
+            aguardar_login(page, modo_automatico=modo_automatico)
+        except LoginNaoDetectado as erro:
+            print(str(erro))
+            resumo["falha_login"] = True
+            contexto.close()
+            return resumo
+
         abrir_timesheet(page)
 
         erros: List[Dict[str, str]] = []
@@ -694,6 +733,7 @@ def main() -> None:
 
                 try:
                     lancar(page, linha)
+                    resumo["lancados"] = int(resumo["lancados"]) + 1
                 except Exception as erro:
                     erro_txt = str(erro)
                     print(f"ERRO NO LANÇAMENTO {linha['id']}: {erro_txt}")
@@ -710,6 +750,8 @@ def main() -> None:
                 sys.stdout = _stdout_real
                 debug_arquivo.close()
 
+        resumo["erros"] = erros
+
         print("\n\nProcesso finalizado.")
         print(f"Lançados: {total - len(erros)}/{total}")
         if erros:
@@ -718,6 +760,16 @@ def main() -> None:
                 print(f"  - Dia {item['dia']} ({item['centro_custo']}): {item['erro']}")
 
         contexto.close()
+
+    return resumo
+
+
+def main() -> None:
+    # Execucao direta (RODAR_ROBO.bat) sempre visivel e interativa, mesmo
+    # que NAVEGADOR_ESCONDIDO esteja ligado - essa e' a via de "conserto
+    # manual" (logar de novo) quando o disparo automatico pelo bot falhar
+    # por sessao expirada.
+    executar(headless=False, modo_automatico=False)
 
 
 if __name__ == "__main__":
