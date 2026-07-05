@@ -1,0 +1,3 @@
+perfil_timesheet/
+*.local.csv
+__pycache__/
