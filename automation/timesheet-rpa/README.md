@@ -162,8 +162,13 @@ apague o atalho `RodarBotTimesheet` em
   se o PC estiver desligado, o bot nao roda; use o instalador acima pra
   pelo menos nao precisar ligar manualmente toda vez que o PC iniciar).
 - Lanca pra **hoje** por padrao, mas entende data se voce mencionar na
-  mensagem: `"ontem"`, `"anteontem"`, `"dia 3"` ou uma data tipo `"03/07"`
-  ou `"03/07/2026"` (ex: `"4h ontem ADM Marketing"`).
+  mensagem: `"ontem"`, `"anteontem"`, `"hoje"`, `"dia 3"`, `"dia 3 de
+  julho"`, `"3 de julho"` ou uma data tipo `"03/07"` ou `"03/07/2026"`
+  (ex: `"4h ontem ADM Marketing"`). Nao entende data por extenso tipo
+  "cinco de julho" (so' digitos).
+- Se nao tiver certeza do Centro de custo, mostra ate' 3 opcoes parecidas
+  numeradas pra voce escolher (responde so' com o numero) - util quando
+  voce nao lembra o nome exato ou o audio saiu com um nome estranho.
 - Nao preenche **Rateio** pela mensagem - se precisar, ajuste direto no
   `lancamentos_timesheet.csv` depois.
 - Se passar `LIMITE_HORAS_SEM_LANCAR` (24h por padrao) sem nenhum

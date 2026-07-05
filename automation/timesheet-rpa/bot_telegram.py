@@ -46,7 +46,7 @@ from typing import Dict, List, Optional, Tuple
 import telebot
 from faster_whisper import WhisperModel
 
-from matching import limpar, melhor_correspondencia, termo_busca_padrao, LIMIAR_CONFIANCA
+from matching import limpar, melhor_correspondencia, melhores_correspondencias, termo_busca_padrao, LIMIAR_CONFIANCA
 import robo_timesheet_v7
 
 ARQUIVO_TOKEN = "telegram_token.txt"
@@ -130,25 +130,42 @@ def mes_ano_de(d: date) -> str:
     return f"{d.year} - {MESES[d.month - 1]}"
 
 
+NOMES_MES_NUM = {
+    "janeiro": 1, "fevereiro": 2, "marco": 3, "março": 3, "abril": 4,
+    "maio": 5, "junho": 6, "julho": 7, "agosto": 8, "setembro": 9,
+    "outubro": 10, "novembro": 11, "dezembro": 12,
+}
+_PADRAO_NOMES_MES = "|".join(NOMES_MES_NUM.keys())
+
+
 def extrair_data(texto: str) -> Tuple[str, str, str]:
     """
-    Acha uma data mencionada na mensagem: "ontem", "anteontem", "dia 3",
-    "03/07" ou "03/07/2026". Se nao achar nada (ou a data for invalida),
-    usa hoje. Retorna (mes_ano, dia, texto_sem_a_data_mencionada).
+    Acha uma data mencionada na mensagem: "ontem", "anteontem", "hoje",
+    "dia 3", "dia 3 de julho", "3 de julho", "03/07" ou "03/07/2026". Se
+    nao achar nada (ou a data for invalida), usa hoje. Retorna
+    (mes_ano, dia, texto_sem_a_data_mencionada) - a parte da data e'
+    sempre removida do texto que sobra, pra nao vazar na Observação.
+
+    Nao entende datas por extenso tipo "cinco de julho" (so' digitos).
     """
     hoje = date.today()
+
+    def cortar(m: re.Match) -> str:
+        return limpar(re.sub(r"\s+", " ", texto[:m.start()] + " " + texto[m.end():]))
 
     m = re.search(r"\bante ?ontem\b", texto, re.IGNORECASE)
     if m:
         d = hoje - timedelta(days=2)
-        texto = limpar(re.sub(r"\s+", " ", texto[:m.start()] + " " + texto[m.end():]))
-        return mes_ano_de(d), f"{d.day:02d}", texto
+        return mes_ano_de(d), f"{d.day:02d}", cortar(m)
 
     m = re.search(r"\bontem\b", texto, re.IGNORECASE)
     if m:
         d = hoje - timedelta(days=1)
-        texto = limpar(re.sub(r"\s+", " ", texto[:m.start()] + " " + texto[m.end():]))
-        return mes_ano_de(d), f"{d.day:02d}", texto
+        return mes_ano_de(d), f"{d.day:02d}", cortar(m)
+
+    m = re.search(r"\bhoje\b", texto, re.IGNORECASE)
+    if m:
+        return mes_ano_de(hoje), f"{hoje.day:02d}", cortar(m)
 
     m = re.search(r"\b(\d{1,2})/(\d{1,2})(?:/(\d{2,4}))?\b", texto)
     if m:
@@ -157,17 +174,25 @@ def extrair_data(texto: str) -> Tuple[str, str, str]:
             if ano < 100:
                 ano += 2000
             d = date(ano, int(m.group(2)), int(m.group(1)))
-            texto = limpar(re.sub(r"\s+", " ", texto[:m.start()] + " " + texto[m.end():]))
-            return mes_ano_de(d), f"{d.day:02d}", texto
+            return mes_ano_de(d), f"{d.day:02d}", cortar(m)
         except ValueError:
             pass  # data invalida (ex: 31/02) - ignora e tenta os outros formatos
+
+    # "dia 5 de julho" ou "5 de julho" (com ou sem a palavra "dia") - comum
+    # em audio, onde a pessoa fala o mes por extenso.
+    m = re.search(rf"\b(?:dia\s+)?(\d{{1,2}})\s+de\s+({_PADRAO_NOMES_MES})\b", texto, re.IGNORECASE)
+    if m:
+        try:
+            d = date(hoje.year, NOMES_MES_NUM[m.group(2).lower()], int(m.group(1)))
+            return mes_ano_de(d), f"{d.day:02d}", cortar(m)
+        except ValueError:
+            pass
 
     m = re.search(r"\bdia\s+(\d{1,2})\b", texto, re.IGNORECASE)
     if m:
         try:
             d = date(hoje.year, hoje.month, int(m.group(1)))
-            texto = limpar(re.sub(r"\s+", " ", texto[:m.start()] + " " + texto[m.end():]))
-            return mes_ano_de(d), f"{d.day:02d}", texto
+            return mes_ano_de(d), f"{d.day:02d}", cortar(m)
         except ValueError:
             pass  # dia invalido pro mes atual (ex: dia 31 em fevereiro)
 
@@ -223,6 +248,11 @@ catalogo = carregar_catalogo()
 
 # Guarda a ultima proposta feita para cada chat, esperando confirmacao.
 pendentes: Dict[int, Dict[str, str]] = {}
+
+# Quando a confianca do centro de custo e' baixa, guarda aqui as opcoes
+# sugeridas + o resto do lancamento, esperando a pessoa responder com um
+# numero (1, 2, 3...) escolhendo qual delas e' a certa.
+aguardando_escolha: Dict[int, Dict[str, object]] = {}
 
 # Trava simples pra nao rodar dois preenchimentos ao mesmo tempo.
 preenchendo = threading.Lock()
@@ -288,8 +318,10 @@ def start(message):
         "Eu acho o centro de custo mais parecido e confirmo com você antes "
         "de gravar (responda sim/não).\n\n"
         "Se não disser o dia, lanço pra hoje. Pra outro dia, inclua na "
-        "mensagem: \"ontem\", \"anteontem\", \"dia 3\" ou uma data tipo "
-        "\"03/07\".\n\n"
+        "mensagem: \"ontem\", \"anteontem\", \"hoje\", \"dia 3\", \"dia 3 "
+        "de julho\" ou uma data tipo \"03/07\".\n\n"
+        "Se eu não tiver certeza do centro de custo, mostro até 3 opções "
+        "parecidas numeradas - só responder com o número certo.\n\n"
         "Quando quiser mandar tudo pro Timesheet de verdade, manda "
         "\"preencher\" - eu abro o navegador escondido e faço sozinho.\n\n"
         "Também aceito áudio - manda gravando \"4 horas ontem ADM "
@@ -313,11 +345,16 @@ def receber_mensagem(message):
 
     if texto_lower in ("não", "nao", "n", "cancela", "cancelar"):
         pendentes.pop(message.chat.id, None)
+        aguardando_escolha.pop(message.chat.id, None)
         bot.reply_to(message, "Beleza, descartei. Manda de novo quando quiser.")
         return
 
     if texto_lower in ("preencher", "atualizar", "/preencher", "/atualizar"):
         threading.Thread(target=preencher_timesheet, args=(message.chat.id,), daemon=True).start()
+        return
+
+    if texto_lower.isdigit() and message.chat.id in aguardando_escolha:
+        escolher_centro_por_numero(message, int(texto_lower))
         return
 
     processar_texto_lancamento(message, texto)
@@ -368,31 +405,71 @@ def processar_texto_lancamento(message, texto: str) -> None:
     centro_escolhido, score_centro = melhor_correspondencia(opcoes_centro, resto)
 
     if not centro_escolhido or score_centro < LIMIAR_CONFIANCA:
+        candidatos = melhores_correspondencias(opcoes_centro, resto, quantidade=3)
+        candidatos = [(nome, score) for nome, score in candidatos if score > 0]
+
+        if not candidatos:
+            bot.reply_to(
+                message,
+                "Não achei nenhum centro de custo parecido com isso. "
+                "Confere o nome e manda de novo."
+            )
+            return
+
+        aguardando_escolha[message.chat.id] = {
+            "mes": mes,
+            "dia": dia,
+            "horas": horas,
+            "observacao": resto,
+            "opcoes": [nome for nome, _ in candidatos],
+        }
+
+        linhas = "\n".join(f"{i}. {nome} ({score:.0%})" for i, (nome, score) in enumerate(candidatos, start=1))
         bot.reply_to(
             message,
-            f"Não tenho certeza do centro de custo (melhor palpite: {centro_escolhido or '-'}, "
-            f"{score_centro:.0%} de parecença). Pode reescrever mais parecido com o nome oficial?"
+            f"Não tenho certeza do centro de custo pra \"{resto}\". Quis dizer:\n"
+            f"{linhas}\n\n"
+            "Responde com o número, ou manda de novo escrevendo o nome mais certo."
         )
         return
 
+    propor_lancamento(message, mes, dia, centro_escolhido, score_centro, horas, resto)
+
+
+def escolher_centro_por_numero(message, numero: int) -> None:
+    dados = aguardando_escolha.pop(message.chat.id, None)
+    if not dados:
+        return
+
+    opcoes = dados["opcoes"]
+    if numero < 1 or numero > len(opcoes):
+        aguardando_escolha[message.chat.id] = dados  # devolve, era so' numero invalido
+        bot.reply_to(message, f"Escolhe um número de 1 a {len(opcoes)}.")
+        return
+
+    centro_escolhido = opcoes[numero - 1]
+    propor_lancamento(message, dados["mes"], dados["dia"], centro_escolhido, 1.0, dados["horas"], dados["observacao"])
+
+
+def propor_lancamento(message, mes: str, dia: str, centro_custo: str, score_centro: float, horas: str, observacao: str) -> None:
     pendentes[message.chat.id] = {
         "mes": mes,
         "dia": dia,
-        "centro_custo": centro_escolhido,
-        "centro_custo_busca": busca_para_nome(catalogo, "centro_custo", centro_escolhido),
+        "centro_custo": centro_custo,
+        "centro_custo_busca": busca_para_nome(catalogo, "centro_custo", centro_custo),
         "rateio": "",
         "rateio_busca": "",
         "horas": horas,
-        "observacao": resto,
+        "observacao": observacao,
     }
 
     bot.reply_to(
         message,
         f"Entendi:\n"
         f"Dia {dia} de {mes}\n"
-        f"Centro de custo: {centro_escolhido} ({score_centro:.0%} de parecença)\n"
+        f"Centro de custo: {centro_custo} ({score_centro:.0%} de parecença)\n"
         f"Horas: {horas[:2]}:{horas[2:]}\n"
-        f"Observação: {resto}\n\n"
+        f"Observação: {observacao}\n\n"
         "Confirma? (sim/não)"
     )
 

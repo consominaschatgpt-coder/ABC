@@ -90,3 +90,14 @@ def melhor_correspondencia(opcoes, texto: str):
             melhor_score = s
 
     return melhor, melhor_score
+
+
+def melhores_correspondencias(opcoes, texto: str, quantidade: int = 3):
+    """
+    Devolve ate' 'quantidade' opcoes mais parecidas com 'texto', da melhor
+    pra pior, cada uma com seu score - usado quando a melhor sozinha nao
+    tem confianca suficiente, pra oferecer escolha em vez de so' recusar.
+    """
+    pontuadas = [(op, score_similaridade(op, texto)) for op in opcoes]
+    pontuadas.sort(key=lambda par: par[1], reverse=True)
+    return pontuadas[:quantidade]
