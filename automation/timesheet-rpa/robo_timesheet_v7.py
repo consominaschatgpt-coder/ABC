@@ -2,45 +2,261 @@
 Robô Local De Preenchimento Do Timesheet
 Versão 7
 
-Herda tudo da v6 (recomeça pela seleção do mês a cada lançamento, porque a
-intranet volta para o calendário em branco após salvar) e adiciona:
+Foco:
+- Sem ENTER a cada lançamento.
+- Vários lançamentos no mesmo dia.
+- Base local DuckDB.
+- Fuzzy match com limite mínimo de 70%.
+- Log de execução.
+- Não salva quando a confiança da seleção for baixa.
 
-- Escolha de opção sempre pela mais parecida (ver matching.py), em vez de
-  desistir e apertar ENTER às cegas na lista suspensa.
-- Modo rápido: não pausa pedindo ENTER a cada lançamento. Só pausa quando
-  um campo obrigatório não tem nenhuma opção parecida o suficiente
-  (falha real), o que precisa de atenção manual mesmo.
-- Relatório final com o score de confiança de cada campo preenchido, para
-  revisar depois de tudo pronto em vez de conferir lançamento por
-  lançamento.
+Importante:
+- Faça login manualmente quando o navegador abrir.
+- Depois disso, o robô detecta a tela e segue sozinho.
 """
 
 import csv
+import difflib
+import re
+import time
+from datetime import datetime
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Optional, Tuple
 
+import duckdb
 from playwright.sync_api import sync_playwright, Page
-
-from matching import escolher_opcao, classificar, limpar, termo_busca_padrao
-from csv_lancamentos import carregar_csv
 
 
 URL = "https://consominas.vindula.net/"
-ARQUIVO_CSV = "lancamentos_timesheet.csv"
-ARQUIVO_RELATORIO = "relatorio_execucao.csv"
+ARQUIVO_LANCAMENTOS = "lancamentos_timesheet.csv"
+ARQUIVO_CATALOGO = "catalogo_opcoes.csv"
+BANCO_DUCKDB = "timesheet_robo.duckdb"
+LOG_EXECUCAO = "log_execucao_timesheet.csv"
 PERFIL_NAVEGADOR = "perfil_timesheet_robo"
 CANAL_NAVEGADOR = "msedge"
 
-MODO_ASSISTIDO = True
-MODO_RAPIDO = True
-ESPERA_CARREGAR_RATEIO_MS = 3500
+LIMIAR_CONFIANCA = 0.70
+SALVAR_AUTOMATICAMENTE = True
+ESPERA_CARREGAR_RATEIO_MS = 3000
+TEMPO_MAXIMO_LOGIN_SEGUNDOS = 180
 
 
-def pausa(mensagem: str) -> None:
-    print("\n" + "=" * 100)
-    print(mensagem)
-    print("=" * 100)
-    input("Pressione ENTER no terminal para continuar...")
+class SelecaoInsegura(Exception):
+    pass
+
+
+def limpar(texto: str) -> str:
+    return (texto or "").strip()
+
+
+def simplificar(texto: str) -> str:
+    texto = limpar(texto).lower()
+    texto = texto.replace("_", " ")
+    texto = re.sub(r"[^\wÀ-ÿ/.\- ]+", " ", texto)
+    texto = re.sub(r"\s+", " ", texto)
+    return texto.strip()
+
+
+def score_similaridade(a: str, b: str) -> float:
+    a_s = simplificar(a)
+    b_s = simplificar(b)
+    if not a_s or not b_s:
+        return 0.0
+
+    if a_s == b_s:
+        return 1.0
+
+    if a_s in b_s or b_s in a_s:
+        return 0.92
+
+    return difflib.SequenceMatcher(None, a_s, b_s).ratio()
+
+
+def termo_busca_padrao(valor: str) -> str:
+    valor = limpar(valor)
+    if not valor:
+        return ""
+
+    partes = [p.strip() for p in valor.split("-") if p.strip()]
+    if len(partes) >= 2:
+        palavras = partes[1].split()
+        if palavras:
+            return " ".join(palavras[:2])
+
+    palavras = valor.split()
+    return " ".join(palavras[:2])
+
+
+def agora() -> str:
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
+def inicializar_banco() -> None:
+    con = duckdb.connect(BANCO_DUCKDB)
+
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS catalogo_opcoes (
+            tipo VARCHAR,
+            nome VARCHAR,
+            busca VARCHAR,
+            apelidos VARCHAR
+        )
+    """)
+
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS lancamentos (
+            id INTEGER,
+            mes VARCHAR,
+            dia VARCHAR,
+            centro_custo VARCHAR,
+            centro_custo_busca VARCHAR,
+            rateio VARCHAR,
+            rateio_busca VARCHAR,
+            horas VARCHAR,
+            observacao VARCHAR,
+            status VARCHAR,
+            erro VARCHAR,
+            atualizado_em VARCHAR
+        )
+    """)
+
+    con.execute("DELETE FROM catalogo_opcoes")
+
+    if Path(ARQUIVO_CATALOGO).exists():
+        con.execute(f"""
+            INSERT INTO catalogo_opcoes
+            SELECT * FROM read_csv_auto('{ARQUIVO_CATALOGO}', header=true, ignore_errors=true)
+        """)
+
+    # Recarrega lançamentos do CSV a cada execução.
+    con.execute("DELETE FROM lancamentos")
+
+    with open(ARQUIVO_LANCAMENTOS, "r", encoding="utf-8-sig", newline="") as f:
+        leitor = csv.DictReader(f)
+        linhas = list(leitor)
+
+    for idx, linha in enumerate(linhas, start=1):
+        centro = limpar(linha.get("centro_custo", ""))
+        rateio = limpar(linha.get("rateio", ""))
+
+        con.execute("""
+            INSERT INTO lancamentos VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, [
+            idx,
+            limpar(linha.get("mes", "")),
+            limpar(linha.get("dia", "")).zfill(2),
+            centro,
+            limpar(linha.get("centro_custo_busca", "")) or buscar_termo_no_catalogo("centro_custo", centro) or termo_busca_padrao(centro),
+            rateio,
+            limpar(linha.get("rateio_busca", "")) or buscar_termo_no_catalogo("rateio", rateio) or termo_busca_padrao(rateio),
+            limpar(linha.get("horas", "")).replace(":", ""),
+            limpar(linha.get("observacao", "")),
+            "pendente",
+            "",
+            agora(),
+        ])
+
+    con.close()
+
+
+def buscar_termo_no_catalogo(tipo: str, nome: str) -> str:
+    if not Path(BANCO_DUCKDB).exists():
+        return ""
+
+    try:
+        con = duckdb.connect(BANCO_DUCKDB)
+        rows = con.execute(
+            "SELECT nome, busca FROM catalogo_opcoes WHERE tipo = ?",
+            [tipo],
+        ).fetchall()
+        con.close()
+    except Exception:
+        return ""
+
+    melhor_busca = ""
+    melhor_score = 0.0
+
+    for nome_cat, busca_cat in rows:
+        s = score_similaridade(nome, nome_cat)
+        if s > melhor_score:
+            melhor_score = s
+            melhor_busca = busca_cat or ""
+
+    if melhor_score >= LIMIAR_CONFIANCA:
+        return melhor_busca
+
+    return ""
+
+
+def obter_lancamentos_pendentes() -> List[Dict[str, str]]:
+    con = duckdb.connect(BANCO_DUCKDB)
+    rows = con.execute("""
+        SELECT id, mes, dia, centro_custo, centro_custo_busca, rateio, rateio_busca, horas, observacao
+        FROM lancamentos
+        WHERE status = 'pendente'
+        ORDER BY id
+    """).fetchall()
+    con.close()
+
+    dados = []
+    for r in rows:
+        dados.append({
+            "id": r[0],
+            "mes": r[1],
+            "dia": r[2],
+            "centro_custo": r[3],
+            "centro_custo_busca": r[4],
+            "rateio": r[5],
+            "rateio_busca": r[6],
+            "horas": r[7],
+            "observacao": r[8],
+        })
+    return dados
+
+
+def atualizar_status(id_lancamento: int, status: str, erro: str = "") -> None:
+    con = duckdb.connect(BANCO_DUCKDB)
+    con.execute("""
+        UPDATE lancamentos
+        SET status = ?, erro = ?, atualizado_em = ?
+        WHERE id = ?
+    """, [status, erro, agora(), id_lancamento])
+    con.close()
+
+
+def escrever_log(id_lancamento: int, status: str, mensagem: str, extra: str = "") -> None:
+    novo = not Path(LOG_EXECUCAO).exists()
+    with open(LOG_EXECUCAO, "a", encoding="utf-8-sig", newline="") as f:
+        w = csv.writer(f)
+        if novo:
+            w.writerow(["data_hora", "id_lancamento", "status", "mensagem", "extra"])
+        w.writerow([agora(), id_lancamento, status, mensagem, extra])
+
+
+def aguardar_login(page: Page) -> None:
+    print("Aguardando login manual na intranet...")
+
+    limite = time.time() + TEMPO_MAXIMO_LOGIN_SEGUNDOS
+
+    while time.time() < limite:
+        try:
+            if page.get_by_text("Time Sheet", exact=False).first.is_visible(timeout=1000):
+                print("Login detectado.")
+                return
+        except Exception:
+            pass
+
+        try:
+            if page.get_by_text("Home", exact=False).first.is_visible(timeout=1000):
+                print("Tela inicial detectada.")
+                return
+        except Exception:
+            pass
+
+        time.sleep(1)
+
+    print("Não consegui detectar o login automaticamente.")
+    input("Se você já está logado, pressione ENTER para continuar...")
 
 
 def abrir_timesheet(page: Page) -> None:
@@ -52,7 +268,25 @@ def abrir_timesheet(page: Page) -> None:
         page.get_by_text("Time Sheet", exact=False).first.click(timeout=12000)
 
     page.wait_for_load_state("domcontentloaded", timeout=30000)
-    page.wait_for_timeout(1500)
+    page.wait_for_timeout(1200)
+
+
+def aguardar_timesheet(page: Page) -> None:
+    try:
+        page.get_by_text("Escolha o Calendário", exact=False).first.wait_for(state="visible", timeout=15000)
+        page.wait_for_timeout(500)
+        return
+    except Exception:
+        pass
+
+    try:
+        page.get_by_text("Timesheet", exact=False).first.wait_for(state="visible", timeout=8000)
+        page.wait_for_timeout(500)
+        return
+    except Exception:
+        pass
+
+    abrir_timesheet(page)
 
 
 def selecionar_mes(page: Page, mes: str) -> None:
@@ -67,93 +301,42 @@ def selecionar_mes(page: Page, mes: str) -> None:
             opcoes = select.locator("option").all_inner_texts()
             if any(mes.lower() in opcao.lower() for opcao in opcoes):
                 select.select_option(label=mes)
-                page.wait_for_timeout(1800)
+                page.wait_for_timeout(1500)
                 return
         except Exception:
             pass
 
-    try:
-        page.get_by_text("Escolha o ano e mês para o registro", exact=False).first.wait_for(state="visible", timeout=6000)
-        campo_calendario = page.locator("select").first
-        campo_calendario.click(timeout=5000)
-        page.wait_for_timeout(500)
-        page.get_by_text(mes, exact=False).first.click(timeout=7000)
-        page.wait_for_timeout(1800)
-        return
-    except Exception:
-        pass
-
-    if MODO_ASSISTIDO:
-        pausa(f"Não consegui selecionar o mês '{mes}'. Selecione manualmente na tela e volte aqui.")
-        return
-
-    raise Exception(f"Não consegui selecionar o mês '{mes}'.")
-
-
-def aguardar_timesheet(page: Page) -> None:
-    print("Aguardando tela do Timesheet...")
-
-    try:
-        page.get_by_text("Escolha o Calendário", exact=False).first.wait_for(state="visible", timeout=15000)
-        page.wait_for_timeout(800)
-        return
-    except Exception:
-        pass
-
-    try:
-        page.get_by_text("Timesheet", exact=False).first.wait_for(state="visible", timeout=8000)
-        page.wait_for_timeout(800)
-        return
-    except Exception:
-        pass
-
-    if MODO_ASSISTIDO:
-        pausa("Não consegui confirmar a tela do Timesheet. Se estiver na tela do Timesheet, pressione ENTER.")
-        return
+    # Fallback manual por clique no primeiro select.
+    campo = page.locator("select").first
+    campo.select_option(label=mes)
+    page.wait_for_timeout(1500)
 
 
 def aguardar_botao_adicionar(page: Page) -> None:
-    print("Aguardando botão Adicionar hora...")
-
-    try:
-        page.get_by_text("Adicionar hora", exact=False).first.wait_for(state="visible", timeout=15000)
-        page.wait_for_timeout(800)
-        return
-    except Exception:
-        pass
-
-    if MODO_ASSISTIDO:
-        pausa("Não encontrei o botão Adicionar hora. Selecione o mês manualmente até ele aparecer e volte aqui.")
-        return
+    page.get_by_text("Adicionar hora", exact=False).first.wait_for(state="visible", timeout=15000)
+    page.wait_for_timeout(500)
 
 
-def preparar_novo_lancamento(page: Page, mes: str) -> None:
+def preparar_lancamento(page: Page, mes: str) -> None:
     aguardar_timesheet(page)
     selecionar_mes(page, mes)
     aguardar_botao_adicionar(page)
 
     print("Clicando em Adicionar hora...")
-    try:
-        page.get_by_text("Adicionar hora", exact=False).first.click(timeout=15000)
-    except Exception:
-        if MODO_ASSISTIDO:
-            pausa("Não consegui clicar em Adicionar hora. Clique manualmente e volte aqui.")
-            return
-        raise
-
+    page.get_by_text("Adicionar hora", exact=False).first.click(timeout=15000)
     page.wait_for_load_state("domcontentloaded", timeout=30000)
-    page.wait_for_timeout(1200)
+    page.wait_for_timeout(1000)
 
 
 def clicar_campo_por_label(page: Page, label: str) -> None:
     label_el = page.get_by_text(label, exact=False).first
-    box = label_el.bounding_box(timeout=6000)
+    box = label_el.bounding_box(timeout=7000)
 
     if not box:
         raise Exception(f"Não encontrei o label '{label}'.")
 
     page.mouse.click(box["x"] + 110, box["y"] + 48)
-    page.wait_for_timeout(650)
+    page.wait_for_timeout(500)
 
 
 def textos_opcoes_visiveis(page: Page) -> List[str]:
@@ -173,16 +356,38 @@ def textos_opcoes_visiveis(page: Page) -> List[str]:
     for seletor in seletores:
         try:
             loc = page.locator(seletor)
-            count = min(loc.count(), 80)
+            count = min(loc.count(), 120)
             for i in range(count):
-                txt = limpar(loc.nth(i).inner_text(timeout=700))
-                if txt and txt not in vistos:
+                txt = limpar(loc.nth(i).inner_text(timeout=600))
+                if txt and txt not in vistos and len(txt) <= 180:
                     vistos.add(txt)
                     textos.append(txt)
         except Exception:
             pass
 
     return textos
+
+
+def melhor_opcao(opcoes: List[str], valor_final: str, busca: str) -> Tuple[Optional[str], float]:
+    if not opcoes:
+        return None, 0.0
+
+    alvo = limpar(valor_final)
+    busca = limpar(busca)
+
+    melhor = None
+    melhor_score = 0.0
+
+    for op in opcoes:
+        s1 = score_similaridade(op, alvo)
+        s2 = score_similaridade(op, busca) * 0.92 if busca else 0.0
+        s = max(s1, s2)
+
+        if s > melhor_score:
+            melhor = op
+            melhor_score = s
+
+    return melhor, melhor_score
 
 
 def clicar_opcao_por_texto(page: Page, texto: str) -> bool:
@@ -201,21 +406,14 @@ def clicar_opcao_por_texto(page: Page, texto: str) -> bool:
             loc = page.locator(seletor).filter(has_text=texto).first
             if loc.count() > 0:
                 loc.click(timeout=5000)
-                page.wait_for_timeout(800)
+                page.wait_for_timeout(700)
                 return True
         except Exception:
             pass
 
     try:
         page.get_by_text(texto, exact=True).first.click(timeout=5000)
-        page.wait_for_timeout(800)
-        return True
-    except Exception:
-        pass
-
-    try:
-        page.get_by_text(texto, exact=False).first.click(timeout=5000)
-        page.wait_for_timeout(800)
+        page.wait_for_timeout(700)
         return True
     except Exception:
         pass
@@ -223,152 +421,111 @@ def clicar_opcao_por_texto(page: Page, texto: str) -> bool:
     return False
 
 
-def selecionar_lista_inteligente(
-    page: Page,
-    label: str,
-    valor_final: str,
-    termo_busca: str,
-    relatorio: List[Dict[str, str]],
-    obrigatorio: bool = True,
-) -> None:
+def gerar_buscas(valor_final: str, busca_csv: str) -> List[str]:
+    termos = []
+    for t in [busca_csv, termo_busca_padrao(valor_final)]:
+        t = limpar(t)
+        if t and t not in termos:
+            termos.append(t)
+
+    palavras = valor_final.split()
+    if palavras:
+        t = palavras[0]
+        if t not in termos:
+            termos.append(t)
+
+    if len(palavras) >= 2:
+        t = " ".join(palavras[:2])
+        if t not in termos:
+            termos.append(t)
+
+    return termos
+
+
+def selecionar_lista_inteligente(page: Page, label: str, valor_final: str, termo_busca: str, obrigatorio: bool = True) -> str:
     valor_final = limpar(valor_final)
-    termo_busca = limpar(termo_busca) or termo_busca_padrao(valor_final)
 
     if not valor_final:
         if obrigatorio:
             raise ValueError(f"Campo obrigatório vazio: {label}")
-        print(f"{label}: vazio. Pulando.")
-        relatorio.append({"campo": label, "esperado": "", "escolhido": "", "score": "", "classe": "vazio"})
-        return
+        return ""
 
-    print(f"Selecionando {label}")
-    print(f"  Busca digitada: {termo_busca}")
-    print(f"  Valor esperado: {valor_final}")
+    print(f"Selecionando {label}: {valor_final}")
 
-    try:
+    melhor_global = None
+    score_global = 0.0
+    opcoes_global = []
+
+    for busca in gerar_buscas(valor_final, termo_busca):
+        print(f"  Tentando busca: {busca}")
+
         clicar_campo_por_label(page, label)
-
         page.keyboard.press("Control+A")
         page.keyboard.press("Backspace")
-        page.wait_for_timeout(250)
-        page.keyboard.type(termo_busca, delay=35)
-        page.wait_for_timeout(1500)
+        page.wait_for_timeout(200)
+        page.keyboard.type(busca, delay=30)
+        page.wait_for_timeout(1200)
 
         opcoes = textos_opcoes_visiveis(page)
-        print(f"  Opções visíveis encontradas: {len(opcoes)}")
+        opcoes_global.extend(opcoes)
 
-        escolhida, score, motivo = escolher_opcao(opcoes, valor_final, termo_busca)
-        classe = classificar(score)
-        print(f"  Escolhida: {escolhida!r} | score={score:.2f} | motivo={motivo} | classe={classe}")
+        escolhida, score = melhor_opcao(opcoes, valor_final, busca)
 
-        relatorio.append({
-            "campo": label,
-            "esperado": valor_final,
-            "escolhido": escolhida or "",
-            "score": f"{score:.2f}",
-            "classe": classe,
-        })
+        print(f"  Opções visíveis: {len(opcoes)} | Melhor: {escolhida} | Confiança: {score:.0%}")
 
-        if classe in ("automatico", "baixa_confianca") and escolhida:
+        if escolhida and score >= LIMIAR_CONFIANCA:
             if clicar_opcao_por_texto(page, escolhida):
-                return
-            print(f"  Não consegui clicar em '{escolhida}', tentando ENTER na opção destacada...")
+                return escolhida
 
-        if classe == "falha" or not escolhida:
-            raise Exception(
-                f"Nenhuma opção parecida o suficiente com '{valor_final}' (melhor score={score:.2f})"
-            )
+        if score > score_global:
+            melhor_global = escolhida
+            score_global = score
 
-        page.keyboard.press("Enter")
-        page.wait_for_timeout(900)
-        return
+        # Fecha dropdown antes da próxima tentativa.
+        page.keyboard.press("Escape")
+        page.wait_for_timeout(300)
 
-    except Exception as erro:
-        print(f"Falha automática em {label}: {erro}")
-
-    if MODO_ASSISTIDO:
-        pausa(
-            f"Não consegui selecionar automaticamente o campo '{label}'.\n\n"
-            f"Escolha manualmente na tela:\n{valor_final}\n\n"
-            "Depois volte ao terminal."
-        )
-        return
-
-    raise Exception(f"Não consegui selecionar '{valor_final}' no campo '{label}'.")
+    extra = f"Melhor opção: {melhor_global} | Confiança: {score_global:.0%} | Opções: {opcoes_global[:10]}"
+    raise SelecaoInsegura(
+        f"Seleção insegura em {label}. Esperado: {valor_final}. {extra}"
+    )
 
 
 def selecionar_dia(page: Page, dia: str) -> None:
     dia = limpar(dia).zfill(2)
     print(f"Selecionando dia: {dia}")
 
-    try:
-        select_dia = page.locator("#id_dia")
-        select_dia.select_option(label=dia, timeout=4000)
-        page.wait_for_timeout(500)
-        return
-    except Exception:
-        pass
+    for seletor in ["#id_dia", "select[name='dia']"]:
+        try:
+            page.locator(seletor).select_option(label=dia, timeout=5000)
+            page.wait_for_timeout(300)
+            return
+        except Exception:
+            pass
 
-    try:
-        select_dia = page.locator("select[name='dia']")
-        select_dia.select_option(label=dia, timeout=4000)
-        page.wait_for_timeout(500)
-        return
-    except Exception:
-        pass
-
-    try:
-        select_dia = page.locator("xpath=(//*[contains(normalize-space(), 'Dia')][1]/following::select[1])")
-        select_dia.select_option(label=dia, timeout=7000)
-        page.wait_for_timeout(500)
-        return
-    except Exception:
-        pass
-
-    if MODO_ASSISTIDO:
-        pausa(f"Não consegui selecionar o Dia {dia}. Selecione manualmente na tela.")
-        return
-
-    raise Exception(f"Não consegui selecionar o dia {dia}.")
+    raise Exception(f"Não consegui selecionar o dia {dia}")
 
 
 def preencher_horas(page: Page, horas: str) -> None:
     horas = limpar(horas).replace(":", "")
     print(f"Preenchendo horas: {horas}")
 
-    seletores = [
-        "#id_horario",
-        "input[name='horario']",
-        "input[type='time']",
-    ]
-
-    ultimo_erro = None
-
-    for seletor in seletores:
+    for seletor in ["#id_horario", "input[name='horario']", "input[type='time']"]:
         try:
             campo = page.locator(seletor).first
             campo.wait_for(state="visible", timeout=5000)
             campo.scroll_into_view_if_needed(timeout=5000)
             campo.click(timeout=5000)
-
             page.keyboard.press("Control+A")
             page.keyboard.press("Backspace")
-            page.wait_for_timeout(250)
-            page.keyboard.type(horas, delay=90)
-            page.wait_for_timeout(500)
+            page.wait_for_timeout(150)
+            page.keyboard.type(horas, delay=60)
+            page.wait_for_timeout(300)
             return
+        except Exception:
+            pass
 
-        except Exception as erro:
-            ultimo_erro = erro
-            continue
-
-    print(f"Falha automática no campo de horas: {ultimo_erro}")
-
-    if MODO_ASSISTIDO:
-        pausa(f"Não consegui preencher horas. Digite manualmente: {horas}")
-        return
-
-    raise Exception("Não consegui preencher Quantidade de horas.")
+    raise Exception("Não consegui preencher Quantidade de horas")
 
 
 def preencher_observacao(page: Page, texto: str) -> None:
@@ -381,8 +538,8 @@ def preencher_observacao(page: Page, texto: str) -> None:
         body.click(timeout=7000)
         body.press("Control+A")
         body.press("Backspace")
-        body.type(texto, delay=5)
-        page.wait_for_timeout(500)
+        body.type(texto, delay=3)
+        page.wait_for_timeout(300)
         return
     except Exception:
         pass
@@ -392,134 +549,109 @@ def preencher_observacao(page: Page, texto: str) -> None:
         editor.click(timeout=7000)
         editor.press("Control+A")
         editor.press("Backspace")
-        editor.type(texto, delay=5)
-        page.wait_for_timeout(500)
+        editor.type(texto, delay=3)
+        page.wait_for_timeout(300)
         return
     except Exception:
         pass
 
     try:
-        textarea = page.locator("textarea:visible").first
-        textarea.fill(texto, timeout=7000)
-        page.wait_for_timeout(500)
+        page.locator("textarea:visible").first.fill(texto, timeout=7000)
+        page.wait_for_timeout(300)
         return
     except Exception:
         pass
 
-    if MODO_ASSISTIDO:
-        pausa(f"Não consegui preencher Observações. Copie manualmente:\n\n{texto}")
-        return
-
-    raise Exception("Não consegui preencher Observações.")
+    raise Exception("Não consegui preencher Observações")
 
 
 def salvar(page: Page) -> None:
-    if not MODO_RAPIDO:
-        pausa(
-            "Confira se Centro de custo, Rateio, Dia, Horas e Observações estão corretos.\n"
-            "Se estiver certo, pressione ENTER e o robô clicará em Salvar."
-        )
-
     print("Salvando...")
 
-    candidatos = [
+    if not SALVAR_AUTOMATICAMENTE:
+        print("SALVAR_AUTOMATICAMENTE = False. Não vou clicar em Salvar.")
+        return
+
+    for seletor in [
         "input[type='submit'][value='Salvar']",
         "#submit-id-submit",
         "button:has-text('Salvar')",
         "text=Salvar",
-    ]
-
-    for seletor in candidatos:
+    ]:
         try:
             page.locator(seletor).first.click(timeout=5000)
             page.wait_for_load_state("domcontentloaded", timeout=30000)
-            page.wait_for_timeout(1500)
-            aguardar_timesheet(page)
+            page.wait_for_timeout(1200)
             return
         except Exception:
             continue
 
-    if MODO_ASSISTIDO:
-        pausa("Não consegui clicar em Salvar. Clique manualmente e depois volte aqui.")
-        aguardar_timesheet(page)
+    raise Exception("Não consegui clicar em Salvar")
+
+
+def tentar_cancelar_ou_voltar(page: Page) -> None:
+    try:
+        page.get_by_text("Cancelar", exact=False).first.click(timeout=3000)
+        page.wait_for_timeout(1000)
         return
+    except Exception:
+        pass
 
-    raise Exception("Não consegui salvar.")
+    try:
+        abrir_timesheet(page)
+    except Exception:
+        pass
 
 
-def lancar(page: Page, linha: Dict[str, str], atual: int, total: int, relatorio: List[Dict[str, str]]) -> None:
+def lancar(page: Page, linha: Dict[str, str]) -> None:
+    id_l = int(linha["id"])
+
     print("\n" + "-" * 100)
-    print(f"Lançamento {atual}/{total}")
-    print(f"Dia: {linha['dia']}")
-    print(f"Centro de custo: {linha['centro_custo']} | Busca: {linha['centro_custo_busca']}")
-    print(f"Rateio: {linha['rateio'] or '(sem rateio)'} | Busca: {linha['rateio_busca'] or '(vazio)'}")
-    print(f"Horas: {linha['horas']}")
+    print(f"Lançamento {id_l}")
+    print(f"{linha['mes']} | Dia {linha['dia']} | {linha['centro_custo']} | {linha['horas']}")
     print("-" * 100)
 
-    preparar_novo_lancamento(page, linha["mes"])
+    preparar_lancamento(page, linha["mes"])
 
-    selecionar_lista_inteligente(
+    selecionado_cc = selecionar_lista_inteligente(
         page,
-        label="Centro de custo",
-        valor_final=linha["centro_custo"],
-        termo_busca=linha["centro_custo_busca"],
-        relatorio=relatorio,
+        "Centro de custo",
+        linha["centro_custo"],
+        linha["centro_custo_busca"],
         obrigatorio=True,
     )
 
+    selecionado_rateio = ""
     if linha["rateio"]:
-        print("Aguardando carregar opções de Rateio...")
         page.wait_for_timeout(ESPERA_CARREGAR_RATEIO_MS)
-
-        selecionar_lista_inteligente(
+        selecionado_rateio = selecionar_lista_inteligente(
             page,
-            label="Rateio",
-            valor_final=linha["rateio"],
-            termo_busca=linha["rateio_busca"],
-            relatorio=relatorio,
+            "Rateio",
+            linha["rateio"],
+            linha["rateio_busca"],
             obrigatorio=False,
         )
     else:
-        print("Sem rateio. Pulando Rateio.")
+        print("Sem rateio.")
 
     selecionar_dia(page, linha["dia"])
     preencher_horas(page, linha["horas"])
     preencher_observacao(page, linha["observacao"])
     salvar(page)
 
-
-def salvar_relatorio(relatorio: List[Dict[str, str]]) -> None:
-    if not relatorio:
-        return
-
-    caminho = Path(ARQUIVO_RELATORIO)
-    with caminho.open("w", newline="", encoding="utf-8") as arquivo:
-        escritor = csv.DictWriter(arquivo, fieldnames=["campo", "esperado", "escolhido", "score", "classe"])
-        escritor.writeheader()
-        escritor.writerows(relatorio)
-
-    total = len(relatorio)
-    automaticos = sum(1 for r in relatorio if r["classe"] == "automatico")
-    baixa_confianca = sum(1 for r in relatorio if r["classe"] == "baixa_confianca")
-    falhas = sum(1 for r in relatorio if r["classe"] == "falha")
-
-    print("\n" + "=" * 100)
-    print(f"Relatório salvo em {caminho.resolve()}")
-    print(f"Campos preenchidos: {total}")
-    print(f"  Automático (alta confiança): {automaticos}")
-    print(f"  Baixa confiança (revisar):   {baixa_confianca}")
-    print(f"  Falha:                       {falhas}")
-    print("=" * 100)
+    msg = f"Centro selecionado: {selecionado_cc} | Rateio selecionado: {selecionado_rateio}"
+    escrever_log(id_l, "lancado", "Lançamento salvo", msg)
+    atualizar_status(id_l, "lancado", "")
 
 
 def main() -> None:
-    linhas = carregar_csv(ARQUIVO_CSV)
-    relatorio: List[Dict[str, str]] = []
+    inicializar_banco()
+    lancamentos = obter_lancamentos_pendentes()
 
     print("Robô Local De Timesheet - Versão 7")
-    print(f"Arquivo: {ARQUIVO_CSV}")
-    print(f"Lançamentos: {len(linhas)}")
-    print(f"Modo rápido: {'ligado' if MODO_RAPIDO else 'desligado'}")
+    print(f"Lançamentos pendentes: {len(lancamentos)}")
+    print(f"Limiar de confiança: {LIMIAR_CONFIANCA:.0%}")
+    print(f"Salvar automaticamente: {SALVAR_AUTOMATICAMENTE}")
 
     with sync_playwright() as p:
         try:
@@ -528,45 +660,39 @@ def main() -> None:
                 headless=False,
                 channel=CANAL_NAVEGADOR,
                 viewport={"width": 1600, "height": 900},
-                slow_mo=120,
+                slow_mo=80,
             )
         except Exception:
-            print("Não consegui abrir pelo Edge. Abrindo Chromium do Playwright.")
+            print("Não consegui abrir Edge. Abrindo Chromium.")
             contexto = p.chromium.launch_persistent_context(
                 user_data_dir=PERFIL_NAVEGADOR,
                 headless=False,
                 viewport={"width": 1600, "height": 900},
-                slow_mo=120,
+                slow_mo=80,
             )
 
         page = contexto.new_page()
         page.goto(URL, wait_until="domcontentloaded")
 
-        pausa("Faça login na intranet. Quando estiver na página inicial, volte aqui.")
-
+        aguardar_login(page)
         abrir_timesheet(page)
 
-        pausa("Confira se você está na tela do Timesheet. Se estiver, volte aqui para iniciar os lançamentos.")
-
-        for i, linha in enumerate(linhas, start=1):
+        for linha in lancamentos:
             try:
-                lancar(page, linha, i, len(linhas), relatorio)
+                lancar(page, linha)
             except Exception as erro:
-                print("\nERRO")
-                print(f"Lançamento: {i}")
-                print(f"Dia: {linha.get('dia')}")
-                print(f"Centro de custo: {linha.get('centro_custo')}")
-                print(f"Erro: {erro}")
-
-                if MODO_ASSISTIDO:
-                    pausa("O navegador ficará aberto. Confira a tela e depois volte aqui.")
-                    break
-                raise
-
-        salvar_relatorio(relatorio)
+                erro_txt = str(erro)
+                print(f"ERRO NO LANÇAMENTO {linha['id']}: {erro_txt}")
+                escrever_log(int(linha["id"]), "erro", erro_txt)
+                atualizar_status(int(linha["id"]), "erro", erro_txt)
+                tentar_cancelar_ou_voltar(page)
+                page.wait_for_timeout(1000)
+                continue
 
         print("\nProcesso finalizado.")
-        pausa("Confira a tela. Depois volte aqui para fechar o navegador.")
+        print(f"Veja o log em: {LOG_EXECUCAO}")
+        print(f"Veja o banco em: {BANCO_DUCKDB}")
+
         contexto.close()
 
 
