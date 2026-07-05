@@ -1,0 +1,28 @@
+# Lista PARCIAL de opcoes reais de "Centro de custo", extraida das telas
+# enviadas (prints da lista suspensa). E' parcial porque as telas mostradas
+# nao cobriram a lista inteira (ela e' longa e tem scroll). Serve para o
+# teste offline de matching (teste_matching_offline.py). Quando tiver a
+# lista completa exportada da intranet, substitua este arquivo.
+ADM Atestado Médico / Declaração de Comparecimento
+ADM Atividades Adm
+ADM Atrasos/Ausência
+ADM Ausência Casamento
+ADM Ausência Luto
+ADM Ausência Paternidade
+ADM COMERCIAL
+ADM Compensação de Banco de Horas
+ADM DEPARTAMENTO PESSOAL
+ADM DESENVOLVIMENTO HUMANO E SOCIAL
+ADM DESENVOLVIMENTO / INOVAÇÃO
+ADM SUSTENTABILIDADE / RITUAL DE GESTÃO
+ADM Diretoria
+ADM DIRETORIA
+ADM LOGISTICA
+ADM MARKETING
+ADM MEDICAO
+ADM MEIO AMBIENTE E SUSTENTABILIDADE
+ADM - NÃO UTILIZAR
+AGA CT 15140/2025 - CB
+BH AIRPORT CT 4600084150/2024
+MRN 3686 BAQ
+PROPOSTA

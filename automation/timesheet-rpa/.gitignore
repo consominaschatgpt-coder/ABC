@@ -1,4 +1,5 @@
 perfil_timesheet/
 perfil_timesheet_robo/
 *.local.csv
+relatorio_execucao.csv
 __pycache__/

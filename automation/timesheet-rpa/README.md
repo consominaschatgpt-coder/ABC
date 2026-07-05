@@ -5,10 +5,46 @@ Automacao local, sem custo mensal, para preencher o Timesheet em
 PC, com o Edge, e voce faz o login manualmente (a senha nunca passa pelo
 codigo).
 
-Versao atual: **`robo_timesheet_v6.py`**. Ela corrige o problema em que,
-apos salvar um lancamento, a intranet volta para a tela do Timesheet com o
-calendario em branco - por isso o robo agora seleciona o mes de novo antes
-de cada lancamento, e nao so uma vez no inicio.
+Versao atual: **`robo_timesheet_v7.py`**. Mantem a correcao da v6 (recomeca
+pela selecao do mes a cada lancamento, porque a intranet volta para o
+calendario em branco apos salvar) e adiciona:
+
+- **Escolha sempre pela opcao mais parecida** (`matching.py`): em vez de
+  desistir e apertar ENTER as cegas numa lista suspensa que nao carregou
+  a opcao exata, o robo compara todas as opcoes visiveis com o valor
+  esperado e escolhe a mais parecida, com um score de confianca de 0 a 1.
+- **Modo rapido** (`MODO_RAPIDO = True`): nao pausa pedindo ENTER a cada
+  lancamento. So pausa quando um campo obrigatorio nao tem nenhuma opcao
+  parecida o suficiente (falha de verdade).
+- **Relatorio final** (`relatorio_execucao.csv`, gerado a cada execucao e
+  ignorado pelo git): mostra o score de cada campo preenchido, para
+  revisar depois em vez de conferir lancamento por lancamento.
+
+## Testar o "matching" sem abrir navegador (recomendado antes de rodar de verdade)
+
+A tela de Centro de custo tem uma lista longa e com nomes parecidos (varios
+"ADM ..." e codigos de contrato como `AGA CT 15140/2025 - CB`). Antes de
+apontar o robo pro site real, da pra validar se o algoritmo de escolha
+acerta a opcao certa mesmo quando o texto do CSV nao bate 100% com o texto
+da tela:
+
+```bash
+python teste_matching_offline.py
+```
+
+Esse teste nao abre navegador nenhum. Ele roda em duas partes:
+
+1. **Casamento direto** - usa `lancamentos_semana_simulada.csv` (uma
+   semana com 2 a 3 centros de custo/contratos diferentes por dia) contra
+   `opcoes_centro_de_custo_exemplo.txt` (lista real, porem parcial,
+   extraida das telas enviadas).
+2. **Estresse com texto imperfeito** - testa abreviacoes/erros de digitacao
+   propositais (ex: `"Logistica"` no lugar de `"ADM LOGISTICA"`) e mede se
+   o algoritmo ainda acha a opcao certa e com que score.
+
+No teste atual, os dois cenarios batem 100% (scores entre 0.69 e 1.00),
+acima do limiar de aceitacao automatica configurado em `matching.py`
+(`LIMIAR_AUTOMATICO = 0.5`).
 
 ## Fluxo que o robo executa
 
@@ -25,7 +61,8 @@ de cada lancamento, e nao so uma vez no inicio.
    - Digita **Horas** sem os dois pontos (ex: `0800` para 08:00).
    - Preenche **Observações** (funciona com editor CKEditor, campo
      `contenteditable` ou `textarea`, dependendo do que a tela usar).
-   - Pausa para voce conferir antes de clicar em **Salvar**.
+   - Clica em **Salvar** direto (modo rapido) - sem pedir ENTER a cada
+     lancamento.
    - Volta para a tela do Timesheet e segue pro proximo lancamento.
 
 Se algum passo nao encontrar o elemento automaticamente, o robo pausa,
@@ -45,7 +82,7 @@ Coloque seu CSV de lancamentos na mesma pasta (ou ajuste `ARQUIVO_CSV` no
 topo do script) e rode:
 
 ```bash
-python robo_timesheet_v6.py
+python robo_timesheet_v7.py
 ```
 
 O navegador abre visivel. Faca login manualmente e o robo continua depois
@@ -70,12 +107,19 @@ mes,dia,centro_custo,centro_custo_busca,rateio,rateio_busca,horas,observacao
 - Deixe `rateio` (e `rateio_busca`) vazios quando o lancamento nao tiver
   rateio.
 
-Veja `README_PASSO_A_PASSO.txt` para o passo a passo resumido.
+Veja `README_PASSO_A_PASSO.txt` para o passo a passo resumido (documento
+original da v6 - a logica de fluxo e' a mesma na v7, so' mudou o matching
+e as pausas).
 
-## Proximos passos (quando a v6 estiver validada)
+## Proximos passos (quando a v7 estiver validada contra o site real)
 
+- Substituir os exemplos por uma semana real de lancamentos (5 a 10
+  linhas) antes de rodar o mes inteiro.
+- Ampliar `opcoes_centro_de_custo_exemplo.txt` com a lista completa de
+  Centro de custo (hoje e' parcial, baseada so' no que apareceu nas
+  telas) para deixar o teste offline mais representativo.
 - Trocar o CSV por Excel (`openpyxl` ja esta nas dependencias) ou por uma
   base local em DuckDB (`duckdb` ja esta nas dependencias) com centros de
   custo, rateios e apelidos cadastrados, para digitar menos.
-- Reduzir as pausas manuais (`CONFIRMAR_ANTES_DE_SALVAR`, `MODO_ASSISTIDO`)
-  conforme os seletores forem validados contra a tela real.
+- Desligar `MODO_ASSISTIDO` (pausas de seguranca) so' depois que os
+  seletores estiverem validados contra a tela real por algumas semanas.

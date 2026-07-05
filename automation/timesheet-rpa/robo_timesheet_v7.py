@@ -1,39 +1,39 @@
 """
 Robô Local De Preenchimento Do Timesheet
-Versão 6
+Versão 7
 
-Correção principal:
-Depois de salvar, a intranet volta para a tela do Timesheet e o mês fica em branco.
-Então, antes de cada lançamento, o robô seleciona o mês novamente e clica em Adicionar hora.
+Herda tudo da v6 (recomeça pela seleção do mês a cada lançamento, porque a
+intranet volta para o calendário em branco após salvar) e adiciona:
+
+- Escolha de opção sempre pela mais parecida (ver matching.py), em vez de
+  desistir e apertar ENTER às cegas na lista suspensa.
+- Modo rápido: não pausa pedindo ENTER a cada lançamento. Só pausa quando
+  um campo obrigatório não tem nenhuma opção parecida o suficiente
+  (falha real), o que precisa de atenção manual mesmo.
+- Relatório final com o score de confiança de cada campo preenchido, para
+  revisar depois de tudo pronto em vez de conferir lançamento por
+  lançamento.
 """
 
 import csv
-import difflib
-import re
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List
 
 from playwright.sync_api import sync_playwright, Page
+
+from matching import escolher_opcao, classificar, limpar, termo_busca_padrao
+from csv_lancamentos import carregar_csv
 
 
 URL = "https://consominas.vindula.net/"
 ARQUIVO_CSV = "lancamentos_timesheet.csv"
+ARQUIVO_RELATORIO = "relatorio_execucao.csv"
 PERFIL_NAVEGADOR = "perfil_timesheet_robo"
 CANAL_NAVEGADOR = "msedge"
 
 MODO_ASSISTIDO = True
-CONFIRMAR_ANTES_DE_SALVAR = True
+MODO_RAPIDO = True
 ESPERA_CARREGAR_RATEIO_MS = 3500
-
-
-def limpar(texto: str) -> str:
-    return (texto or "").strip()
-
-
-def simplificar(texto: str) -> str:
-    texto = limpar(texto).lower()
-    texto = re.sub(r"\s+", " ", texto)
-    return texto
 
 
 def pausa(mensagem: str) -> None:
@@ -41,72 +41,6 @@ def pausa(mensagem: str) -> None:
     print(mensagem)
     print("=" * 100)
     input("Pressione ENTER no terminal para continuar...")
-
-
-def termo_busca_padrao(valor: str) -> str:
-    valor = limpar(valor)
-    if not valor:
-        return ""
-
-    partes = [p.strip() for p in valor.split("-") if p.strip()]
-    if len(partes) >= 2:
-        palavras = partes[1].split()
-        if palavras:
-            return " ".join(palavras[:2])
-
-    palavras = valor.split()
-    return " ".join(palavras[:2])
-
-
-def carregar_csv() -> List[Dict[str, str]]:
-    caminho = Path(ARQUIVO_CSV)
-
-    if not caminho.exists():
-        raise FileNotFoundError(f"Arquivo não encontrado: {caminho.resolve()}")
-
-    with caminho.open("r", encoding="utf-8-sig", newline="") as arquivo:
-        linhas = list(csv.DictReader(arquivo))
-
-    if not linhas:
-        raise ValueError("CSV vazio.")
-
-    colunas_minimas = {"mes", "dia", "centro_custo", "rateio", "horas", "observacao"}
-    faltantes = colunas_minimas - set(linhas[0].keys())
-
-    if faltantes:
-        raise ValueError(f"Colunas faltando no CSV: {', '.join(sorted(faltantes))}")
-
-    tratadas = []
-
-    for i, linha in enumerate(linhas, start=1):
-        centro_custo = limpar(linha.get("centro_custo", ""))
-        rateio = limpar(linha.get("rateio", ""))
-
-        item = {
-            "mes": limpar(linha.get("mes", "")),
-            "dia": limpar(linha.get("dia", "")).zfill(2),
-            "centro_custo": centro_custo,
-            "centro_custo_busca": limpar(linha.get("centro_custo_busca", "")) or termo_busca_padrao(centro_custo),
-            "rateio": rateio,
-            "rateio_busca": limpar(linha.get("rateio_busca", "")) or termo_busca_padrao(rateio),
-            "horas": limpar(linha.get("horas", "")).replace(":", ""),
-            "observacao": limpar(linha.get("observacao", "")),
-        }
-
-        if not item["mes"]:
-            raise ValueError(f"Linha {i}: mês vazio.")
-        if not item["dia"]:
-            raise ValueError(f"Linha {i}: dia vazio.")
-        if not item["centro_custo"]:
-            raise ValueError(f"Linha {i}: centro_custo vazio.")
-        if not item["horas"]:
-            raise ValueError(f"Linha {i}: horas vazio.")
-        if not item["observacao"]:
-            raise ValueError(f"Linha {i}: observacao vazia.")
-
-        tratadas.append(item)
-
-    return tratadas
 
 
 def abrir_timesheet(page: Page) -> None:
@@ -124,7 +58,6 @@ def abrir_timesheet(page: Page) -> None:
 def selecionar_mes(page: Page, mes: str) -> None:
     print(f"Selecionando mês: {mes}")
 
-    # Estratégia 1: select nativo.
     selects = page.locator("select")
     total = selects.count()
 
@@ -139,7 +72,6 @@ def selecionar_mes(page: Page, mes: str) -> None:
         except Exception:
             pass
 
-    # Estratégia 2: clique no campo do calendário e seleção por texto.
     try:
         page.get_by_text("Escolha o ano e mês para o registro", exact=False).first.wait_for(state="visible", timeout=6000)
         campo_calendario = page.locator("select").first
@@ -196,11 +128,6 @@ def aguardar_botao_adicionar(page: Page) -> None:
 
 
 def preparar_novo_lancamento(page: Page, mes: str) -> None:
-    """
-    Sempre recomeça pela tela do Timesheet.
-    Seleciona o mês e depois clica em Adicionar hora.
-    Isso corrige o retorno para calendário em branco após salvar.
-    """
     aguardar_timesheet(page)
     selecionar_mes(page, mes)
     aguardar_botao_adicionar(page)
@@ -258,48 +185,6 @@ def textos_opcoes_visiveis(page: Page) -> List[str]:
     return textos
 
 
-def melhor_opcao(opcoes: List[str], valor_final: str, busca: str) -> Optional[str]:
-    if not opcoes:
-        return None
-
-    alvo = simplificar(valor_final)
-    busca_s = simplificar(busca)
-
-    for op in opcoes:
-        if simplificar(op) == alvo:
-            return op
-
-    for op in opcoes:
-        if alvo and alvo in simplificar(op):
-            return op
-
-    candidatos = []
-    for op in opcoes:
-        if busca_s and busca_s in simplificar(op):
-            candidatos.append(op)
-
-    if candidatos:
-        return sorted(
-            candidatos,
-            key=lambda x: difflib.SequenceMatcher(None, simplificar(x), alvo).ratio(),
-            reverse=True,
-        )[0]
-
-    ordenadas = sorted(
-        opcoes,
-        key=lambda x: difflib.SequenceMatcher(None, simplificar(x), alvo).ratio(),
-        reverse=True,
-    )
-
-    melhor = ordenadas[0]
-    score = difflib.SequenceMatcher(None, simplificar(melhor), alvo).ratio()
-
-    if score >= 0.35:
-        return melhor
-
-    return None
-
-
 def clicar_opcao_por_texto(page: Page, texto: str) -> bool:
     seletores = [
         ".select2-results__option",
@@ -338,7 +223,14 @@ def clicar_opcao_por_texto(page: Page, texto: str) -> bool:
     return False
 
 
-def selecionar_lista_inteligente(page: Page, label: str, valor_final: str, termo_busca: str, obrigatorio: bool = True) -> None:
+def selecionar_lista_inteligente(
+    page: Page,
+    label: str,
+    valor_final: str,
+    termo_busca: str,
+    relatorio: List[Dict[str, str]],
+    obrigatorio: bool = True,
+) -> None:
     valor_final = limpar(valor_final)
     termo_busca = limpar(termo_busca) or termo_busca_padrao(valor_final)
 
@@ -346,6 +238,7 @@ def selecionar_lista_inteligente(page: Page, label: str, valor_final: str, termo
         if obrigatorio:
             raise ValueError(f"Campo obrigatório vazio: {label}")
         print(f"{label}: vazio. Pulando.")
+        relatorio.append({"campo": label, "esperado": "", "escolhido": "", "score": "", "classe": "vazio"})
         return
 
     print(f"Selecionando {label}")
@@ -364,17 +257,28 @@ def selecionar_lista_inteligente(page: Page, label: str, valor_final: str, termo
         opcoes = textos_opcoes_visiveis(page)
         print(f"  Opções visíveis encontradas: {len(opcoes)}")
 
-        for op in opcoes[:8]:
-            print(f"    - {op}")
+        escolhida, score, motivo = escolher_opcao(opcoes, valor_final, termo_busca)
+        classe = classificar(score)
+        print(f"  Escolhida: {escolhida!r} | score={score:.2f} | motivo={motivo} | classe={classe}")
 
-        escolhida = melhor_opcao(opcoes, valor_final, termo_busca)
+        relatorio.append({
+            "campo": label,
+            "esperado": valor_final,
+            "escolhido": escolhida or "",
+            "score": f"{score:.2f}",
+            "classe": classe,
+        })
 
-        if escolhida:
-            print(f"  Opção escolhida: {escolhida}")
+        if classe in ("automatico", "baixa_confianca") and escolhida:
             if clicar_opcao_por_texto(page, escolhida):
                 return
+            print(f"  Não consegui clicar em '{escolhida}', tentando ENTER na opção destacada...")
 
-        print("  Tentando selecionar opção destacada com ENTER...")
+        if classe == "falha" or not escolhida:
+            raise Exception(
+                f"Nenhuma opção parecida o suficiente com '{valor_final}' (melhor score={score:.2f})"
+            )
+
         page.keyboard.press("Enter")
         page.wait_for_timeout(900)
         return
@@ -510,7 +414,7 @@ def preencher_observacao(page: Page, texto: str) -> None:
 
 
 def salvar(page: Page) -> None:
-    if CONFIRMAR_ANTES_DE_SALVAR:
+    if not MODO_RAPIDO:
         pausa(
             "Confira se Centro de custo, Rateio, Dia, Horas e Observações estão corretos.\n"
             "Se estiver certo, pressione ENTER e o robô clicará em Salvar."
@@ -543,7 +447,7 @@ def salvar(page: Page) -> None:
     raise Exception("Não consegui salvar.")
 
 
-def lancar(page: Page, linha: Dict[str, str], atual: int, total: int) -> None:
+def lancar(page: Page, linha: Dict[str, str], atual: int, total: int, relatorio: List[Dict[str, str]]) -> None:
     print("\n" + "-" * 100)
     print(f"Lançamento {atual}/{total}")
     print(f"Dia: {linha['dia']}")
@@ -559,6 +463,7 @@ def lancar(page: Page, linha: Dict[str, str], atual: int, total: int) -> None:
         label="Centro de custo",
         valor_final=linha["centro_custo"],
         termo_busca=linha["centro_custo_busca"],
+        relatorio=relatorio,
         obrigatorio=True,
     )
 
@@ -571,6 +476,7 @@ def lancar(page: Page, linha: Dict[str, str], atual: int, total: int) -> None:
             label="Rateio",
             valor_final=linha["rateio"],
             termo_busca=linha["rateio_busca"],
+            relatorio=relatorio,
             obrigatorio=False,
         )
     else:
@@ -582,12 +488,38 @@ def lancar(page: Page, linha: Dict[str, str], atual: int, total: int) -> None:
     salvar(page)
 
 
-def main() -> None:
-    linhas = carregar_csv()
+def salvar_relatorio(relatorio: List[Dict[str, str]]) -> None:
+    if not relatorio:
+        return
 
-    print("Robô Local De Timesheet - Versão 6")
+    caminho = Path(ARQUIVO_RELATORIO)
+    with caminho.open("w", newline="", encoding="utf-8") as arquivo:
+        escritor = csv.DictWriter(arquivo, fieldnames=["campo", "esperado", "escolhido", "score", "classe"])
+        escritor.writeheader()
+        escritor.writerows(relatorio)
+
+    total = len(relatorio)
+    automaticos = sum(1 for r in relatorio if r["classe"] == "automatico")
+    baixa_confianca = sum(1 for r in relatorio if r["classe"] == "baixa_confianca")
+    falhas = sum(1 for r in relatorio if r["classe"] == "falha")
+
+    print("\n" + "=" * 100)
+    print(f"Relatório salvo em {caminho.resolve()}")
+    print(f"Campos preenchidos: {total}")
+    print(f"  Automático (alta confiança): {automaticos}")
+    print(f"  Baixa confiança (revisar):   {baixa_confianca}")
+    print(f"  Falha:                       {falhas}")
+    print("=" * 100)
+
+
+def main() -> None:
+    linhas = carregar_csv(ARQUIVO_CSV)
+    relatorio: List[Dict[str, str]] = []
+
+    print("Robô Local De Timesheet - Versão 7")
     print(f"Arquivo: {ARQUIVO_CSV}")
     print(f"Lançamentos: {len(linhas)}")
+    print(f"Modo rápido: {'ligado' if MODO_RAPIDO else 'desligado'}")
 
     with sync_playwright() as p:
         try:
@@ -618,7 +550,7 @@ def main() -> None:
 
         for i, linha in enumerate(linhas, start=1):
             try:
-                lancar(page, linha, i, len(linhas))
+                lancar(page, linha, i, len(linhas), relatorio)
             except Exception as erro:
                 print("\nERRO")
                 print(f"Lançamento: {i}")
@@ -630,6 +562,8 @@ def main() -> None:
                     pausa("O navegador ficará aberto. Confira a tela e depois volte aqui.")
                     break
                 raise
+
+        salvar_relatorio(relatorio)
 
         print("\nProcesso finalizado.")
         pausa("Confira a tela. Depois volte aqui para fechar o navegador.")
