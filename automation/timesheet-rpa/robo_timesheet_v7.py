@@ -680,9 +680,9 @@ def executar(headless: bool = False, modo_automatico: Optional[bool] = None) -> 
 
     resumo: Dict[str, object] = {"total": total, "lancados": 0, "erros": [], "falha_login": False}
 
-    if total == 0:
-        return resumo
-
+    # Sempre abre o navegador e faz login, mesmo com 0 lancamentos
+    # pendentes - RODAR_ROBO.bat tambem serve pra estabelecer/renovar a
+    # sessao salva, mesmo quando nao ha nada pra lancar ainda.
     with sync_playwright() as p:
         try:
             contexto = p.chromium.launch_persistent_context(
