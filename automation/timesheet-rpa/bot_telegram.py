@@ -10,7 +10,6 @@ Fluxo:
   arquivo que o robo_timesheet_v7.py lê para preencher o Timesheet de verdade.
 
 Limitações desta primeira versão (MVP):
-- Sempre lança pra hoje (não dá pra dizer "ontem" ainda).
 - Não preenche Rateio pela mensagem (deixe em branco e ajuste no CSV se
   precisar de rateio nesse lançamento).
 - O lembrete (se passar 24h sem nenhum lançamento novo) só funciona
@@ -30,9 +29,9 @@ import csv
 import re
 import time as time_module
 import threading
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 import telebot
 
@@ -110,13 +109,52 @@ def remover_horas(texto: str) -> str:
     return limpar(re.sub(r"\s+", " ", texto))
 
 
-def mes_ano_atual() -> str:
+def mes_ano_de(d: date) -> str:
+    return f"{d.year} - {MESES[d.month - 1]}"
+
+
+def extrair_data(texto: str) -> Tuple[str, str, str]:
+    """
+    Acha uma data mencionada na mensagem: "ontem", "anteontem", "dia 3",
+    "03/07" ou "03/07/2026". Se nao achar nada (ou a data for invalida),
+    usa hoje. Retorna (mes_ano, dia, texto_sem_a_data_mencionada).
+    """
     hoje = date.today()
-    return f"{hoje.year} - {MESES[hoje.month - 1]}"
 
+    m = re.search(r"\bante ?ontem\b", texto, re.IGNORECASE)
+    if m:
+        d = hoje - timedelta(days=2)
+        texto = limpar(re.sub(r"\s+", " ", texto[:m.start()] + " " + texto[m.end():]))
+        return mes_ano_de(d), f"{d.day:02d}", texto
 
-def dia_atual() -> str:
-    return f"{date.today().day:02d}"
+    m = re.search(r"\bontem\b", texto, re.IGNORECASE)
+    if m:
+        d = hoje - timedelta(days=1)
+        texto = limpar(re.sub(r"\s+", " ", texto[:m.start()] + " " + texto[m.end():]))
+        return mes_ano_de(d), f"{d.day:02d}", texto
+
+    m = re.search(r"\b(\d{1,2})/(\d{1,2})(?:/(\d{2,4}))?\b", texto)
+    if m:
+        try:
+            ano = int(m.group(3)) if m.group(3) else hoje.year
+            if ano < 100:
+                ano += 2000
+            d = date(ano, int(m.group(2)), int(m.group(1)))
+            texto = limpar(re.sub(r"\s+", " ", texto[:m.start()] + " " + texto[m.end():]))
+            return mes_ano_de(d), f"{d.day:02d}", texto
+        except ValueError:
+            pass  # data invalida (ex: 31/02) - ignora e tenta os outros formatos
+
+    m = re.search(r"\bdia\s+(\d{1,2})\b", texto, re.IGNORECASE)
+    if m:
+        try:
+            d = date(hoje.year, hoje.month, int(m.group(1)))
+            texto = limpar(re.sub(r"\s+", " ", texto[:m.start()] + " " + texto[m.end():]))
+            return mes_ano_de(d), f"{d.day:02d}", texto
+        except ValueError:
+            pass  # dia invalido pro mes atual (ex: dia 31 em fevereiro)
+
+    return mes_ano_de(hoje), f"{hoje.day:02d}", texto
 
 
 def gravar_lancamento(mes: str, dia: str, centro_custo: str, centro_custo_busca: str,
@@ -169,8 +207,11 @@ def start(message):
         "Manda assim: \"4h ADM Marketing\" ou \"3h AGA CT 15140\".\n"
         "Eu acho o centro de custo mais parecido e confirmo com você antes "
         "de gravar (responda sim/não).\n\n"
-        "Por enquanto eu sempre lanço pra hoje e sem rateio - se precisar "
-        "de rateio, ajuste direto no lancamentos_timesheet.csv."
+        "Se não disser o dia, lanço pra hoje. Pra outro dia, inclua na "
+        "mensagem: \"ontem\", \"anteontem\", \"dia 3\" ou uma data tipo "
+        "\"03/07\".\n\n"
+        "Por enquanto não preencho Rateio pela mensagem - se precisar, "
+        "ajuste direto no lancamentos_timesheet.csv."
     )
 
 
@@ -191,12 +232,14 @@ def receber_mensagem(message):
         bot.reply_to(message, "Beleza, descartei. Manda de novo quando quiser.")
         return
 
-    horas = extrair_horas(texto)
+    mes, dia, texto_sem_data = extrair_data(texto)
+
+    horas = extrair_horas(texto_sem_data)
     if not horas:
-        bot.reply_to(message, "Não achei a quantidade de horas na mensagem. Tenta algo tipo \"4h ADM Marketing\".")
+        bot.reply_to(message, "Não achei a quantidade de horas na mensagem. Tenta algo tipo \"4h ADM Marketing\" ou \"4h ontem ADM Marketing\".")
         return
 
-    resto = remover_horas(texto)
+    resto = remover_horas(texto_sem_data)
     if not resto:
         bot.reply_to(message, "Entendi as horas, mas não achei o centro de custo. Manda de novo com o nome dele.")
         return
@@ -213,8 +256,8 @@ def receber_mensagem(message):
         return
 
     pendentes[message.chat.id] = {
-        "mes": mes_ano_atual(),
-        "dia": dia_atual(),
+        "mes": mes,
+        "dia": dia,
         "centro_custo": centro_escolhido,
         "centro_custo_busca": busca_para_nome(catalogo, "centro_custo", centro_escolhido),
         "rateio": "",
@@ -226,7 +269,7 @@ def receber_mensagem(message):
     bot.reply_to(
         message,
         f"Entendi:\n"
-        f"Dia {dia_atual()} de {mes_ano_atual()}\n"
+        f"Dia {dia} de {mes}\n"
         f"Centro de custo: {centro_escolhido} ({score_centro:.0%} de parecença)\n"
         f"Horas: {horas[:2]}:{horas[2:]}\n"
         f"Observação: {resto}\n\n"

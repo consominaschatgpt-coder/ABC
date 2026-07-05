@@ -134,8 +134,9 @@ achar o bot e' ignorada.
 
 - So' funciona enquanto o script estiver rodando no seu PC (nao e' 24/7
   ainda - isso e' um proximo passo, depois de validar o uso no dia a dia).
-- Sempre lanca pra **hoje** (ainda nao entende "ontem" ou uma data
-  especifica).
+- Lanca pra **hoje** por padrao, mas entende data se voce mencionar na
+  mensagem: `"ontem"`, `"anteontem"`, `"dia 3"` ou uma data tipo `"03/07"`
+  ou `"03/07/2026"` (ex: `"4h ontem ADM Marketing"`).
 - Nao preenche **Rateio** pela mensagem - se precisar, ajuste direto no
   `lancamentos_timesheet.csv` depois.
 - Se passar `LIMITE_HORAS_SEM_LANCAR` (24h por padrao) sem nenhum
