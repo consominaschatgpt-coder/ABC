@@ -54,12 +54,18 @@ funcionava (sem mexer no fluxo comprovado):
 Cada execucao grava:
 
 - **`timesheet_robo.duckdb`**: base local com o catalogo de opcoes e o
-  status de cada lancamento (`pendente`, `lancado`, `erro`). Como o
-  status fica salvo, rodar o script de novo nao repete o que ja foi
-  lancado com sucesso.
+  status de cada lancamento durante a execucao (`pendente`, `lancado`,
+  `erro`).
 - **`log_execucao_timesheet.csv`**: log linha a linha (data/hora, id,
   status, centro/rateio escolhidos ou erro). Os dois arquivos sao gerados
   localmente e ignorados pelo git (dados de execucao, nao codigo).
+
+Ao final, o robo **remove do `lancamentos_timesheet.csv`** as linhas que
+foram lancadas com sucesso (deixa so' as que deram erro, pra tentar de
+novo depois). Isso e' essencial: como o bot dispara o preenchimento varias
+vezes (ao ligar, ou toda vez que voce manda "preencher"), sem isso ele
+relançaria os mesmos lancamentos repetidas vezes, duplicando no Timesheet
+real.
 
 ## Instalar
 
@@ -104,9 +110,12 @@ novo.
 
 Esse e' o unico programa que voce precisa deixar ligado no dia a dia. Em
 vez de editar o CSV na mao, manda uma mensagem no Telegram tipo
-`"4h ADM Marketing"` e o bot grava o lancamento pra voce, depois de
-confirmar. Ele usa o mesmo algoritmo de comparacao do robo (`matching.py`)
-pra achar o Centro de custo certo no `catalogo_opcoes.csv`.
+`"4h ADM Marketing"` e o bot **ja grava o lancamento direto**, sem esperar
+confirmacao - e te mostra o que entendeu (dia, centro de custo, rateio,
+horas, observacao). Nao espera "sim" porque a pessoa nem sempre olha o
+Telegram na hora; se sair errado, manda **`desfazer`** que ele tira o
+ultimo lancamento gravado. Ele usa o mesmo algoritmo de comparacao do robo
+(`matching.py`) pra achar o Centro de custo certo no `catalogo_opcoes.csv`.
 
 Quando quiser mandar tudo pro Timesheet de verdade, manda **`preencher`**
 (ou `atualizar`) pro bot - ele abre o navegador escondido, no mesmo
@@ -116,7 +125,8 @@ Nao precisa de um segundo programa pra isso.
 Tambem aceita **audio**: grava algo tipo *"4 horas ontem ADM Marketing"*
 e manda como audio no Telegram - o bot transcreve com Whisper local
 (`faster-whisper`, roda no seu PC, sem custo por uso) e processa igual a
-uma mensagem de texto, te mostrando o que entendeu antes de confirmar. Na
+uma mensagem de texto. Cada audio usa seu proprio arquivo temporario, entao
+mandar varios audios em sequencia nao faz um atrapalhar o outro. Na
 primeira vez que usar audio, baixa o modelo de voz (uns 150MB) - so'
 acontece uma vez.
 
@@ -174,12 +184,23 @@ seguinte), ele recebe tudo que ficou pendente.
 
 **Ligar o bot sozinho quando o Windows iniciar:**
 
-Da 2 cliques em `INSTALAR_INICIO_AUTOMATICO.bat` **uma vez**. Isso cria um
-atalho na pasta de Inicializacao do Windows apontando pro `RODAR_BOT.bat`
-- da proxima vez que voce ligar o PC (ou fizer login no Windows), o bot
-abre sozinho (minimizado), sem precisar clicar em nada. Pra desfazer,
-apague o atalho `RodarBotTimesheet` em
+Da 2 cliques em `INSTALAR_INICIO_AUTOMATICO.bat` **uma vez**. Ele primeiro
+remove o bloqueio de seguranca do Windows dos arquivos desta pasta (a tela
+"Fornecedor Desconhecido" que aparece em arquivos baixados da internet) e
+depois cria um atalho na pasta de Inicializacao do Windows apontando pro
+`RODAR_BOT.bat` - da proxima vez que voce ligar o PC (ou fizer login no
+Windows), o bot abre sozinho (minimizado), sem precisar clicar em nada e
+sem pedir confirmacao de seguranca. Pra desfazer, apague o atalho
+`RodarBotTimesheet` em
 `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup`.
+
+Se voce baixar uma pasta/zip nova depois, ela vem com o bloqueio de novo -
+so' rodar `INSTALAR_INICIO_AUTOMATICO.bat` de novo (ou, sem instalar o
+atalho de novo, rodar so' o comando abaixo no PowerShell dentro da pasta):
+
+```powershell
+Get-ChildItem -Path . -Recurse | Unblock-File
+```
 
 Toda vez que o bot inicia (seja pelo atalho automatico ou manual), ele
 espera `ESPERA_AO_LIGAR_SEGUNDOS` (45s por padrao - da tempo de receber
@@ -199,9 +220,9 @@ e' intencional, pra ser 100% automatico.
   julho"`, `"3 de julho"` ou uma data tipo `"03/07"` ou `"03/07/2026"`
   (ex: `"4h ontem ADM Marketing"`). Nao entende data por extenso tipo
   "cinco de julho" (so' digitos).
-- Se nao tiver certeza do Centro de custo, mostra ate' 3 opcoes parecidas
-  numeradas pra voce escolher (responde so' com o numero) - util quando
-  voce nao lembra o nome exato ou o audio saiu com um nome estranho.
+- Se nao tiver certeza do Centro de custo, lanca mesmo assim com o melhor
+  palpite e avisa a parecenca + outras possibilidades na mensagem - manda
+  `"desfazer"` e tenta de novo mais especifico se estiver errado.
 - Entende **Rateio** se voce mencionar por ultimo na mensagem, ex: `"3h
   PROPOSTA rateio state grid"`. Casa contra os rateios cadastrados em
   `catalogo_opcoes.csv` (tipo `rateio`) com o mesmo algoritmo do Centro de

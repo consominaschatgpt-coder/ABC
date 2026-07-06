@@ -1,4 +1,8 @@
 @echo off
+echo Removendo bloqueio de seguranca dos arquivos desta pasta (evita a tela
+echo "Fornecedor Desconhecido" toda vez que o Windows tentar abrir sozinho)...
+powershell -NoProfile -Command "Get-ChildItem -Path '%~dp0' -Recurse | Unblock-File" >nul 2>&1
+
 echo Configurando o bot para iniciar sozinho quando o Windows ligar...
 
 set SCRIPT="%TEMP%\criar_atalho_timesheet.vbs"

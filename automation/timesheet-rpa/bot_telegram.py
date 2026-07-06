@@ -9,9 +9,12 @@ Fluxo:
   minutos por extenso, etc. Sem esse arquivo, usa só regras de texto fixas
   (mais simples, funciona melhor com frases curtas e diretas tipo "4h
   ADM Marketing rateio state grid").
-- Ele devolve o que entendeu e pede confirmação (sim/não).
-- Confirmando, grava uma nova linha em lancamentos_timesheet.csv - o mesmo
-  arquivo que o robo_timesheet_v7.py lê para preencher o Timesheet de verdade.
+- Ele já grava direto (sem esperar confirmação) e te mostra o que entendeu
+  - dia, centro de custo, rateio, horas e observação - numa nova linha em
+  lancamentos_timesheet.csv, o mesmo arquivo que o robo_timesheet_v7.py lê
+  para preencher o Timesheet de verdade. Nao espera "sim" porque nem
+  sempre a pessoa olha o Telegram na hora - se sair errado, manda
+  "desfazer" que tira o ultimo lancamento.
 
 Manda "preencher" (ou "atualizar") pro bot quando quiser que ele abra o
 navegador (escondido) e lance no Timesheet de verdade tudo que estiver
@@ -20,8 +23,10 @@ sempre ligado, recebendo mensagens e preenchendo quando voce mandar.
 
 Tambem aceita audio: manda um audio tipo "4 horas ontem ADM Marketing"
 que o bot transcreve (Whisper local, sem custo) e processa igual a uma
-mensagem de texto. Na primeira vez que usar audio, ele baixa o modelo de
-voz (uns 150MB) - pode demorar um pouco.
+mensagem de texto. Cada audio processa no seu proprio arquivo temporario
+(nao se atrapalham entre si se voce mandar varios em sequencia). Na
+primeira vez que usar audio, ele baixa o modelo de voz (uns 150MB) - pode
+demorar um pouco.
 
 Ao ligar (ou reconectar depois de ficar offline), o bot espera um pouco
 pra receber qualquer mensagem que ficou em espera no Telegram e depois
@@ -195,14 +200,18 @@ def remover_horas(texto: str) -> str:
 
 def extrair_rateio(texto: str) -> Tuple[str, str]:
     """
-    Se a mensagem mencionar "rateio" (ex: "... rateio state grid"), extrai
-    o texto depois dessa palavra como a descrição do rateio - so' ate' a
-    proxima pontuação (vírgula/ponto), pra não pegar o resto da frase
-    inteira quando a pessoa continua falando depois. Mencione o rateio por
-    último e de forma curta (ex: "rateio state grid"). Retorna
-    (texto_do_rateio_ou_vazio, texto_sem_esse_trecho).
+    Se a mensagem mencionar "rateio" (ex: "... rateio state grid" ou
+    "... rateio, proposta acompanhamento..."), extrai o texto depois dessa
+    palavra como a descrição do rateio - so' ate' a proxima pontuação
+    (vírgula/ponto), pra não pegar o resto da frase inteira quando a
+    pessoa continua falando depois. Aceita virgula/pontuação logo depois
+    da palavra "rateio" (comum quando a pessoa faz uma pausa ao falar).
+    Retorna (texto_do_rateio_ou_vazio, texto_sem_esse_trecho).
     """
-    m = re.search(r"\brateio\b[:\s]*(?:é|eh|seria|foi)?\s*([^,.;\n]{1,60})", texto, re.IGNORECASE)
+    m = re.search(
+        r"\brateio\b[\s,:;]*(?:é|eh|seria|foi)?[\s,:;]*([^,.;\n]{1,60})",
+        texto, re.IGNORECASE,
+    )
     if m and limpar(m.group(1)):
         return limpar(m.group(1)), limpar(texto[:m.start()] + " " + texto[m.end():])
     return "", texto
@@ -332,14 +341,6 @@ _cliente_ia = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
 bot = telebot.TeleBot(TOKEN)
 catalogo = carregar_catalogo()
 
-# Guarda a ultima proposta feita para cada chat, esperando confirmacao.
-pendentes: Dict[int, Dict[str, str]] = {}
-
-# Quando a confianca do centro de custo e' baixa, guarda aqui as opcoes
-# sugeridas + o resto do lancamento, esperando a pessoa responder com um
-# numero (1, 2, 3...) escolhendo qual delas e' a certa.
-aguardando_escolha: Dict[int, Dict[str, object]] = {}
-
 # Trava simples pra nao rodar dois preenchimentos ao mesmo tempo.
 preenchendo = threading.Lock()
 
@@ -401,20 +402,19 @@ def start(message):
     bot.reply_to(
         message,
         "Manda assim: \"4h ADM Marketing\" ou \"3h AGA CT 15140\".\n"
-        "Eu acho o centro de custo mais parecido e confirmo com você antes "
-        "de gravar (responda sim/não).\n\n"
+        "Eu já lanço direto (sem precisar confirmar) e te mostro o que "
+        "entendi. Se algo sair errado, manda \"desfazer\" que eu tiro o "
+        "último lançamento.\n\n"
         "Se não disser o dia, lanço pra hoje. Pra outro dia, inclua na "
         "mensagem: \"ontem\", \"anteontem\", \"hoje\", \"dia 3\", \"dia 3 "
         "de julho\" ou uma data tipo \"03/07\".\n\n"
-        "Se eu não tiver certeza do centro de custo, mostro até 3 opções "
-        "parecidas numeradas - só responder com o número certo.\n\n"
         "Quando quiser mandar tudo pro Timesheet de verdade, manda "
-        "\"preencher\" - eu abro o navegador escondido e faço sozinho.\n\n"
+        "\"preencher\" - eu abro o navegador escondido e faço sozinho "
+        "(também faço isso sozinho uns segundos depois de eu ligar).\n\n"
         "Também aceito áudio - manda gravando \"4 horas ontem ADM "
         "Marketing\" que eu transcrevo e processo igual.\n\n"
-        "Se tiver rateio, menciona por último na mensagem: \"3h PROPOSTA "
-        "rateio state grid\". Se não achar com certeza, deixo sem rateio "
-        "e aviso."
+        "Se tiver rateio, menciona na mensagem: \"3h PROPOSTA rateio state "
+        "grid\". Se não achar com certeza, deixo sem rateio e aviso."
     )
 
 
@@ -426,22 +426,16 @@ def receber_mensagem(message):
     texto = limpar(message.text)
     texto_lower = texto.lower()
 
-    if texto_lower in ("sim", "s", "confirma", "confirmar"):
-        confirmar_pendente(message)
+    if texto_lower in ("desfazer", "desfaz", "/desfazer", "não", "nao", "n", "cancela", "cancelar"):
+        desfazer_ultimo(message)
         return
 
-    if texto_lower in ("não", "nao", "n", "cancela", "cancelar"):
-        pendentes.pop(message.chat.id, None)
-        aguardando_escolha.pop(message.chat.id, None)
-        bot.reply_to(message, "Beleza, descartei. Manda de novo quando quiser.")
+    if texto_lower in ("sim", "s", "confirma", "confirmar"):
+        bot.reply_to(message, "Já lanço tudo direto, não precisa confirmar. Manda \"desfazer\" se algum sair errado.")
         return
 
     if texto_lower in ("preencher", "atualizar", "/preencher", "/atualizar"):
         threading.Thread(target=preencher_timesheet, args=(message.chat.id,), daemon=True).start()
-        return
-
-    if texto_lower.isdigit() and message.chat.id in aguardando_escolha:
-        escolher_centro_por_numero(message, int(texto_lower))
         return
 
     processar_texto_lancamento(message, texto)
@@ -458,7 +452,10 @@ def receber_audio(message):
         info_arquivo = bot.get_file(arquivo_id)
         dados = bot.download_file(info_arquivo.file_path)
 
-        caminho_temp = Path(f"{message.chat.id}_{ARQUIVO_AUDIO_TEMP}")
+        # Nome unico por mensagem (nao so' por chat) - se a pessoa mandar
+        # varios audios em sequencia, cada um processa no seu proprio
+        # arquivo, sem um apagar/sobrescrever o do outro no meio do caminho.
+        caminho_temp = Path(f"{message.chat.id}_{message.message_id}_{ARQUIVO_AUDIO_TEMP}")
         caminho_temp.write_bytes(dados)
 
         texto = transcrever_audio(str(caminho_temp))
@@ -489,7 +486,7 @@ def processar_texto_lancamento(message, texto: str) -> None:
 
         if resultado:
             mes, dia, centro_custo, rateio, horas, observacao = resultado
-            propor_lancamento(message, mes, dia, centro_custo, 1.0, horas, observacao, rateio, "")
+            salvar_lancamento(message, mes, dia, centro_custo, 1.0, horas, observacao, rateio, "")
             return
 
     processar_texto_lancamento_regras(message, texto)
@@ -596,37 +593,15 @@ def processar_texto_lancamento_regras(message, texto: str) -> None:
     opcoes_centro = nomes_do_tipo(catalogo, "centro_custo")
     centro_escolhido, score_centro = melhor_correspondencia(opcoes_centro, resto)
 
-    if not centro_escolhido or score_centro < LIMIAR_CONFIANCA:
-        candidatos = melhores_correspondencias(opcoes_centro, resto, quantidade=3)
-        candidatos = [(nome, score) for nome, score in candidatos if score > 0]
-
-        if not candidatos:
-            bot.reply_to(
-                message,
-                "Não achei nenhum centro de custo parecido com isso. "
-                "Confere o nome e manda de novo."
-            )
-            return
-
-        aguardando_escolha[message.chat.id] = {
-            "mes": mes,
-            "dia": dia,
-            "horas": horas,
-            "observacao": resto,
-            "rateio": rateio_escolhido,
-            "opcoes": [nome for nome, _ in candidatos],
-        }
-
-        linhas = "\n".join(f"{i}. {nome} ({score:.0%})" for i, (nome, score) in enumerate(candidatos, start=1))
+    if not centro_escolhido:
         bot.reply_to(
             message,
-            f"Não tenho certeza do centro de custo pra \"{resto}\". Quis dizer:\n"
-            f"{linhas}\n\n"
-            "Responde com o número, ou manda de novo escrevendo o nome mais certo."
+            "Não achei nenhum centro de custo parecido com isso. "
+            "Confere o nome e manda de novo."
         )
         return
 
-    propor_lancamento(message, mes, dia, centro_escolhido, score_centro, horas, resto, rateio_escolhido, rateio_aviso)
+    salvar_lancamento(message, mes, dia, centro_escolhido, score_centro, horas, resto, rateio_escolhido, rateio_aviso)
 
 
 def resolver_rateio(rateio_texto: str) -> Tuple[str, str]:
@@ -649,61 +624,70 @@ def resolver_rateio(rateio_texto: str) -> Tuple[str, str]:
     )
 
 
-def escolher_centro_por_numero(message, numero: int) -> None:
-    dados = aguardando_escolha.pop(message.chat.id, None)
-    if not dados:
-        return
-
-    opcoes = dados["opcoes"]
-    if numero < 1 or numero > len(opcoes):
-        aguardando_escolha[message.chat.id] = dados  # devolve, era so' numero invalido
-        bot.reply_to(message, f"Escolhe um número de 1 a {len(opcoes)}.")
-        return
-
-    centro_escolhido = opcoes[numero - 1]
-    propor_lancamento(
-        message, dados["mes"], dados["dia"], centro_escolhido, 1.0,
-        dados["horas"], dados["observacao"], dados.get("rateio", ""), "",
+def salvar_lancamento(message, mes: str, dia: str, centro_custo: str, score_centro: float,
+                       horas: str, observacao: str, rateio: str = "", rateio_aviso: str = "") -> None:
+    """
+    Grava o lancamento direto, sem esperar confirmacao - a pessoa nem
+    sempre olha o Telegram na hora, entao esperar "sim" so' fazia o
+    lancamento se perder. Se sair errado, ela manda "desfazer".
+    """
+    gravar_lancamento(
+        mes=mes,
+        dia=dia,
+        centro_custo=centro_custo,
+        centro_custo_busca=busca_para_nome(catalogo, "centro_custo", centro_custo),
+        rateio=rateio,
+        rateio_busca=busca_para_nome(catalogo, "rateio", rateio) if rateio else "",
+        horas=horas,
+        observacao=observacao,
     )
 
-
-def propor_lancamento(message, mes: str, dia: str, centro_custo: str, score_centro: float,
-                       horas: str, observacao: str, rateio: str = "", rateio_aviso: str = "") -> None:
-    pendentes[message.chat.id] = {
-        "mes": mes,
-        "dia": dia,
-        "centro_custo": centro_custo,
-        "centro_custo_busca": busca_para_nome(catalogo, "centro_custo", centro_custo),
-        "rateio": rateio,
-        "rateio_busca": busca_para_nome(catalogo, "rateio", rateio) if rateio else "",
-        "horas": horas,
-        "observacao": observacao,
-    }
-
     linha_rateio = f"Rateio: {rateio}\n" if rateio else ""
-    aviso = f"\n{rateio_aviso}\n" if rateio_aviso else ""
+    aviso_rateio = f"\n{rateio_aviso}" if rateio_aviso else ""
+
+    aviso_confianca = ""
+    if score_centro < LIMIAR_CONFIANCA:
+        opcoes_centro = nomes_do_tipo(catalogo, "centro_custo")
+        alternativas = melhores_correspondencias(opcoes_centro, observacao, quantidade=3)
+        alternativas = [nome for nome, score in alternativas if nome != centro_custo and score > 0][:2]
+        texto_alt = f" Outras possibilidades: {', '.join(alternativas)}." if alternativas else ""
+        aviso_confianca = (
+            f"\n⚠️ Não tenho certeza desse centro de custo ({score_centro:.0%} de parecença)."
+            f"{texto_alt} Se estiver errado, manda \"desfazer\" e tenta de novo mais específico."
+        )
 
     bot.reply_to(
         message,
-        f"Entendi:\n"
+        f"Lançado:\n"
         f"Dia {dia} de {mes}\n"
         f"Centro de custo: {centro_custo} ({score_centro:.0%} de parecença)\n"
         f"{linha_rateio}"
         f"Horas: {horas[:2]}:{horas[2:]}\n"
-        f"Observação: {observacao}\n"
-        f"{aviso}\n"
-        "Confirma? (sim/não)"
+        f"Observação: {observacao}"
+        f"{aviso_rateio}"
+        f"{aviso_confianca}"
     )
 
 
-def confirmar_pendente(message) -> None:
-    dados = pendentes.pop(message.chat.id, None)
-    if not dados:
-        bot.reply_to(message, "Não tem nada pendente pra confirmar. Manda o lançamento primeiro.")
+def desfazer_ultimo(message) -> None:
+    p = Path(ARQUIVO_LANCAMENTOS)
+    if not p.exists():
+        bot.reply_to(message, "Não tem nenhum lançamento pra desfazer.")
         return
 
-    gravar_lancamento(**dados)
-    bot.reply_to(message, "Lançado no CSV. Quando quiser, manda \"preencher\" pra eu mandar tudo pro Timesheet de verdade.")
+    with p.open("r", encoding="utf-8-sig", newline="") as f:
+        linhas = list(csv.reader(f))
+
+    if len(linhas) <= 1:
+        bot.reply_to(message, "Não tem nenhum lançamento pra desfazer.")
+        return
+
+    removida = linhas.pop()
+    with p.open("w", newline="", encoding="utf-8-sig") as f:
+        csv.writer(f).writerows(linhas)
+
+    dia, centro, horas = removida[1], removida[2], removida[6]
+    bot.reply_to(message, f"Desfeito: dia {dia}, {centro}, {horas[:2]}:{horas[2:]}h.")
 
 
 def loop_lembrete() -> None:

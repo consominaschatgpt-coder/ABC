@@ -216,6 +216,33 @@ def escrever_log(id_lancamento: int, status: str, mensagem: str, extra: str = ""
         w.writerow([agora(), id_lancamento, status, mensagem, extra])
 
 
+def remover_lancados_do_csv() -> None:
+    """
+    Tira do lancamentos_timesheet.csv as linhas que acabaram de ser
+    lancadas com sucesso nesta execucao. Sem isso, toda proxima chamada de
+    executar() (o "preencher" do bot, o preenchimento automatico ao ligar,
+    ou rodar RODAR_ROBO.bat de novo) reprocessaria TODAS as linhas do CSV
+    de novo desde sempre - duplicando no Timesheet real cada vez que o
+    robo roda.
+    """
+    con = duckdb.connect(BANCO_DUCKDB)
+    restantes = con.execute("""
+        SELECT mes, dia, centro_custo, centro_custo_busca, rateio, rateio_busca, horas, observacao
+        FROM lancamentos
+        WHERE status != 'lancado'
+        ORDER BY id
+    """).fetchall()
+    con.close()
+
+    with open(ARQUIVO_LANCAMENTOS, "w", newline="", encoding="utf-8-sig") as f:
+        w = csv.writer(f)
+        w.writerow([
+            "mes", "dia", "centro_custo", "centro_custo_busca",
+            "rateio", "rateio_busca", "horas", "observacao",
+        ])
+        w.writerows(restantes)
+
+
 class LoginNaoDetectado(Exception):
     pass
 
@@ -751,6 +778,9 @@ def executar(headless: bool = False, modo_automatico: Optional[bool] = None) -> 
                 debug_arquivo.close()
 
         resumo["erros"] = erros
+
+        if total:
+            remover_lancados_do_csv()
 
         print("\n\nProcesso finalizado.")
         print(f"Lançados: {total - len(erros)}/{total}")
