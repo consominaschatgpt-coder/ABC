@@ -19,11 +19,15 @@ que o bot transcreve (Whisper local, sem custo) e processa igual a uma
 mensagem de texto. Na primeira vez que usar audio, ele baixa o modelo de
 voz (uns 150MB) - pode demorar um pouco.
 
+Ao ligar (ou reconectar depois de ficar offline), o bot espera um pouco
+pra receber qualquer mensagem que ficou em espera no Telegram e depois
+preenche automaticamente o que estiver confirmado no CSV - nao precisa
+mandar "preencher" toda vez que o PC ligar.
+
 Limitações desta primeira versão (MVP):
-- Não preenche Rateio pela mensagem (deixe em branco e ajuste no CSV se
-  precisar de rateio nesse lançamento).
-- O lembrete (se passar 24h sem nenhum lançamento novo) e o "preencher"
-  só funcionam enquanto este script estiver rodando no seu PC.
+- O lembrete (se passar 24h sem nenhum lançamento novo) e o preenchimento
+  só funcionam enquanto este script estiver rodando no seu PC (use
+  INSTALAR_INICIO_AUTOMATICO.bat pra ele ligar sozinho com o Windows).
 - Só um preenchimento por vez - se mandar "preencher" de novo enquanto
   o anterior ainda esta rodando, ele avisa e ignora.
 
@@ -55,6 +59,7 @@ ARQUIVO_CATALOGO = "catalogo_opcoes.csv"
 ARQUIVO_LANCAMENTOS = "lancamentos_timesheet.csv"
 
 LIMITE_HORAS_SEM_LANCAR = 24  # avisa se passar desse tempo sem nenhum lançamento novo
+ESPERA_AO_LIGAR_SEGUNDOS = 45  # tempo pra receber mensagens em espera antes de preencher sozinho
 
 MODELO_WHISPER = "base"  # troque para "small" se quiser mais precisao (mais lento)
 ARQUIVO_AUDIO_TEMP = "audio_temp.ogg"
@@ -560,7 +565,17 @@ def loop_lembrete() -> None:
         time_module.sleep(600)
 
 
+def preencher_ao_iniciar() -> None:
+    # Espera um pouco pra dar tempo do bot processar qualquer mensagem que
+    # ficou em espera no Telegram (enquanto o PC estava desligado) antes
+    # de preencher - assim, ligar o PC ja' cobre "recebe o que ficou
+    # pendente + lanca no Timesheet" sem precisar mandar "preencher".
+    time_module.sleep(ESPERA_AO_LIGAR_SEGUNDOS)
+    preencher_timesheet(CHAT_ID_PERMITIDO)
+
+
 if __name__ == "__main__":
     print("Bot do Timesheet rodando. Ctrl+C para parar.")
     threading.Thread(target=loop_lembrete, daemon=True).start()
+    threading.Thread(target=preencher_ao_iniciar, daemon=True).start()
     bot.infinity_polling()

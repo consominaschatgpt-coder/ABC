@@ -156,6 +156,14 @@ abre sozinho (minimizado), sem precisar clicar em nada. Pra desfazer,
 apague o atalho `RodarBotTimesheet` em
 `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup`.
 
+Toda vez que o bot inicia (seja pelo atalho automatico ou manual), ele
+espera `ESPERA_AO_LIGAR_SEGUNDOS` (45s por padrao - da tempo de receber
+mensagens que ficaram em espera no Telegram) e depois preenche sozinho o
+que estiver confirmado no CSV, sem precisar mandar "preencher". Como isso
+acontece em **todo** inicio do bot (inclusive quando voce reinicia pra
+testar algo), pode aparecer um preenchimento nao esperado nesses casos -
+e' intencional, pra ser 100% automatico.
+
 **Limitacoes desta primeira versao (MVP):**
 
 - So' funciona enquanto o script estiver rodando no seu PC (nao e' 24/7 -
