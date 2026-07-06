@@ -1,0 +1,97 @@
+COMECE AQUI - Robo + Bot do Timesheet (Consominas)
+====================================================
+
+O QUE É ISSO
+-------------
+Um programa (o "bot") que fica sempre ligado no seu PC, recebe suas
+mensagens/audios no Telegram contando as horas trabalhadas, guarda tudo
+localmente e, quando você mandar "preencher", abre o navegador escondido
+e lança de verdade no Timesheet (https://consominas.vindula.net/).
+
+
+PASSO 1 - INSTALAR
+-------------------
+1. Extraia esta pasta inteira num lugar fixo (ex: Documentos), sem deixar
+   dentro de outra pasta com o mesmo nome duas vezes.
+2. Dentro dela, crie 3 arquivos de texto (sem extensão .txt duplicada,
+   sem espaço/linha em branco extra dentro):
+   - telegram_token.txt        -> o token que o @BotFather te deu
+   - telegram_chat_id.txt      -> seu chat_id, do @userinfobot
+   - openai_api_key.txt        -> (opcional) a chave da API da OpenAI, se
+                                   quiser que o bot entenda áudio/texto
+                                   livre de forma bem mais esperta
+3. Dê 2 cliques em RODAR_ROBO.bat.
+   - Ele instala tudo sozinho (só demora na primeira vez).
+   - Abre o navegador VISÍVEL - faça login normalmente, uma vez.
+   - Depois disso o login fica salvo (não precisa repetir sempre).
+4. Dê 2 cliques em INSTALAR_INICIO_AUTOMATICO.bat (uma vez só).
+   - Remove o bloqueio de segurança do Windows desta pasta.
+   - Configura o bot pra ligar sozinho quando o Windows iniciar.
+
+
+PASSO 2 - USAR NO DIA A DIA
+----------------------------
+Manda mensagem (texto ou áudio) pro bot no Telegram contando o que fez.
+
+PADRÃO RECOMENDADO PRA DITAR (por áudio ou texto), sempre nesta ordem,
+com uma pausa/vírgula entre cada parte:
+
+    tempo, centro de custo, rateio (ou "sem rateio"), observação
+
+Exemplos:
+  "6 horas, ADM Marketing, sem rateio, revisão de slides"
+  "4 horas, proposta state grid, rateio state grid, visita técnica"
+  "4h ADM Marketing"   (forma curta, sem rateio nem observação)
+
+O bot já GRAVA DIRETO (não espera "sim") e te mostra o que entendeu. Isso
+fica só guardado no seu PC - ainda NÃO foi pro Timesheet de verdade.
+
+Antes de mandar pro Timesheet de verdade, você pode conferir/corrigir:
+
+  "pendentes"   -> mostra numerado tudo que ainda não foi lançado
+  "editar N campo valor"  -> corrige um lançamento específico, ex:
+        "editar 2 centro_custo ADM Marketing"
+        "editar 2 rateio state grid"   (ou "editar 2 rateio sem")
+        "editar 2 horas 0430"
+        "editar 2 dia 7"
+  "desfazer"    -> apaga o último lançamento inteiro
+
+Quando estiver tudo certo, manda "preencher" - o bot abre o navegador
+escondido e lança tudo de verdade no Timesheet, te avisando o resultado.
+Ele também faz isso sozinho automaticamente uns 45 segundos depois de
+ligar (dando tempo de chegar mensagens que ficaram em espera).
+
+Se você não mandar nada, ele te lembra depois de 24h sem lançamento novo.
+
+
+ARQUIVOS IMPORTANTES
+----------------------
+- bot_telegram.py           -> o programa que você deixa rodando sempre
+- robo_timesheet_v7.py      -> o robô que realmente abre o navegador
+- lancamentos_timesheet.csv -> fila local dos lançamentos ainda não
+                                enviados pro Timesheet de verdade
+- catalogo_opcoes.csv       -> lista de Centro de custo / Rateio válidos
+- RODAR_BOT.bat             -> roda o bot manualmente
+- RODAR_ROBO.bat            -> roda o robô visível (use se o login expirar)
+- INSTALAR_INICIO_AUTOMATICO.bat -> configura pra ligar sozinho com o PC
+
+
+DÚVIDAS FREQUENTES
+--------------------
+"Apareceu 'Fornecedor Desconhecido' ao abrir o .bat"
+  -> Rode INSTALAR_INICIO_AUTOMATICO.bat de novo (ele desbloqueia os
+     arquivos toda vez que roda).
+
+"A sessão de login expirou, o preencher não conseguiu"
+  -> Rode RODAR_ROBO.bat manualmente uma vez (abre visível) pra logar de
+     novo.
+
+"Mandei 'pendentes' e não apareceu meu lançamento"
+  -> Ele já foi lançado de verdade no Timesheet (some da lista assim que
+     um "preencher" processa com sucesso).
+
+"O bot não entendeu o áudio direito"
+  -> Tenta seguir o padrão: tempo, centro de custo, rateio (ou "sem
+     rateio"), observação - com uma pausa entre cada parte. Se mesmo
+     assim sair errado, usa "editar N campo valor" pra corrigir sem
+     precisar ditar tudo de novo.

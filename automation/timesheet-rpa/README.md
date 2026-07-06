@@ -113,9 +113,34 @@ vez de editar o CSV na mao, manda uma mensagem no Telegram tipo
 `"4h ADM Marketing"` e o bot **ja grava o lancamento direto**, sem esperar
 confirmacao - e te mostra o que entendeu (dia, centro de custo, rateio,
 horas, observacao). Nao espera "sim" porque a pessoa nem sempre olha o
-Telegram na hora; se sair errado, manda **`desfazer`** que ele tira o
-ultimo lancamento gravado. Ele usa o mesmo algoritmo de comparacao do robo
+Telegram na hora. Ele usa o mesmo algoritmo de comparacao do robo
 (`matching.py`) pra achar o Centro de custo certo no `catalogo_opcoes.csv`.
+
+Isso so' fica guardado localmente (`lancamentos_timesheet.csv`) - nada vai
+pro Timesheet de verdade ate' voce mandar `"preencher"`. Antes disso, da'
+pra conferir e corrigir:
+
+- **`pendentes`** (ou `relatorio`/`lista`): mostra numerado tudo que ainda
+  nao foi mandado pro Timesheet - funciona so' lendo o arquivo local, sem
+  precisar de internet nem da IA.
+- **`editar N campo valor`**: corrige um campo especifico de um lancamento
+  pendente sem precisar desfazer e ditar tudo de novo - ex: `"editar 2
+  centro_custo ADM Marketing"`, `"editar 2 rateio state grid"` (ou
+  `"editar 2 rateio sem"` pra tirar o rateio), `"editar 2 horas 0430"`,
+  `"editar 2 dia 7"`.
+- **`desfazer`**: tira o ultimo lancamento gravado (o de antes de
+  `editar`/`pendentes` existirem).
+
+**Padrao recomendado pra ditar por audio** (funciona tanto com IA quanto
+sem): **tempo, centro de custo, rateio (se tiver - senao fala "sem
+rateio"), observacao**, cada parte separada por uma pausa/virgula. Ex:
+`"6 horas, ADM Marketing, sem rateio, revisao de slides"` ou `"4 horas,
+proposta state grid, rateio state grid, visita tecnica"`. Isso da' pro
+bot muito mais confianca no Centro de custo (o fuzzy-match compara so' o
+trecho do centro de custo, nao a frase toda) e resolve o caso comum de o
+Whisper ouvir "rateio" como "raterio"/"rateiro"/"ratejo" (o bot reconhece
+essas variantes) e de "sem rateio" ser entendido como uma resposta valida
+(nao um erro).
 
 Quando quiser mandar tudo pro Timesheet de verdade, manda **`preencher`**
 (ou `atualizar`) pro bot - ele abre o navegador escondido, no mesmo
@@ -156,8 +181,12 @@ Se voce tiver (ou sua empresa tiver) uma chave de API da OpenAI:
    (`sk-proj-...`).
 2. Pronto - o bot passa a usar IA pra interpretar a mensagem inteira,
    entendendo frases soltas/narradas, rateio no meio da frase, minutos por
-   extenso, etc. Ainda assim so aceita um Centro de custo/Rateio que exista
-   de verdade no `catalogo_opcoes.csv` (a IA nao inventa opcao).
+   extenso, etc. O nome de Centro de custo/Rateio que a IA identifica
+   passa pelo mesmo fuzzy-match do modo sem IA (`matching.py`) - ou seja,
+   nao precisa ser copia exata do `catalogo_opcoes.csv` (a IA normaliza
+   "adem marketing" pra "ADM Marketing" sozinha, e o fuzzy-match ainda
+   calcula uma confianca de verdade em cima disso, em vez de sempre
+   mostrar 100%).
 
 Custo: e' a API paga por uso (nao e' a mesma coisa que uma assinatura de
 chat tipo ChatGPT Plus - e' uma conta separada, em platform.openai.com).
@@ -166,7 +195,9 @@ Pro volume de uma pessoa lancando horas todo dia, o custo e' bem baixo
 
 Se o arquivo nao existir, ou a chamada pra API falhar por qualquer motivo
 (sem internet, chave invalida, etc), o bot cai automaticamente pras
-regras de texto - nunca trava por causa da IA.
+regras de texto - nunca trava por causa da IA, e agora te avisa no
+Telegram quando isso acontece (antes so' aparecia no terminal, entao
+passava despercebido).
 
 **Rodar:**
 
@@ -223,11 +254,15 @@ e' intencional, pra ser 100% automatico.
 - Se nao tiver certeza do Centro de custo, lanca mesmo assim com o melhor
   palpite e avisa a parecenca + outras possibilidades na mensagem - manda
   `"desfazer"` e tenta de novo mais especifico se estiver errado.
-- Entende **Rateio** se voce mencionar por ultimo na mensagem, ex: `"3h
-  PROPOSTA rateio state grid"`. Casa contra os rateios cadastrados em
-  `catalogo_opcoes.csv` (tipo `rateio`) com o mesmo algoritmo do Centro de
-  custo. Se nao achar com confianca, deixa sem rateio e avisa - ajuste
-  direto no `lancamentos_timesheet.csv` se precisar.
+- Entende **Rateio** se voce mencionar na mensagem (ex: `"3h PROPOSTA
+  rateio state grid"` ou, no padrao recomendado por audio, `"3 horas,
+  PROPOSTA, rateio state grid, observacao"`). Casa contra os rateios
+  cadastrados em `catalogo_opcoes.csv` (tipo `rateio`) com o mesmo
+  algoritmo do Centro de custo, e reconhece variantes comuns de
+  transcricao de audio (`"raterio"`, `"rateiro"`, `"ratejo"`) e a negacao
+  explicita (`"sem rateio"`, `"nao tem rateio"`) como uma resposta valida.
+  Se nao achar com confianca, deixa sem rateio e avisa - use `"editar N
+  rateio <nome>"` pra corrigir sem precisar ditar tudo de novo.
 - Se passar `LIMITE_HORAS_SEM_LANCAR` (24h por padrao) sem nenhum
   lancamento novo, ele manda um lembrete uma vez - e volta a poder avisar
   de novo se ficar 24h parado outra vez.

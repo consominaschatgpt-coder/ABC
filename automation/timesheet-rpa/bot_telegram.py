@@ -4,17 +4,28 @@ Bot do Telegram para lançar horas no Timesheet por mensagem.
 Fluxo:
 - Você manda uma mensagem tipo "4h ADM Marketing" ou "3h AGA CT 15140" -
   pode ser bem mais livre/narrado se a IA estiver configurada (veja abaixo).
+- Padrão recomendado pra ditar por áudio: tempo (horas), centro de custo,
+  rateio (se tiver - senão fala "sem rateio"), observação - cada parte
+  separada por uma pausa/vírgula, ex: "6 horas, ADM Marketing, sem
+  rateio, revisão de slides". Isso vale tanto pro modo com IA quanto pro
+  modo de regras (sem IA) - ambos foram ajustados pra entender essa
+  ordem, incluindo erros comuns de transcrição de áudio (ex: Whisper
+  ouvindo "rateio" como "raterio"/"rateiro"/"ratejo").
 - Se `openai_api_key.txt` existir, o bot usa IA (OpenAI) pra interpretar a
   mensagem inteira - entende frases soltas, narradas, com rateio no meio,
-  minutos por extenso, etc. Sem esse arquivo, usa só regras de texto fixas
-  (mais simples, funciona melhor com frases curtas e diretas tipo "4h
-  ADM Marketing rateio state grid").
+  minutos por extenso, etc, e ainda calcula uma confiança de verdade pro
+  centro de custo/rateio (não força mais cópia exata do catálogo). Sem
+  esse arquivo, ou se a IA falhar (sem internet, chave inválida etc - te
+  aviso no Telegram quando isso acontece), usa as regras de texto fixas.
 - Ele já grava direto (sem esperar confirmação) e te mostra o que entendeu
   - dia, centro de custo, rateio, horas e observação - numa nova linha em
   lancamentos_timesheet.csv, o mesmo arquivo que o robo_timesheet_v7.py lê
   para preencher o Timesheet de verdade. Nao espera "sim" porque nem
-  sempre a pessoa olha o Telegram na hora - se sair errado, manda
-  "desfazer" que tira o ultimo lancamento.
+  sempre a pessoa olha o Telegram na hora. Nada disso vai pro Timesheet
+  de verdade até você mandar "preencher" - antes disso dá pra conferir
+  tudo com "pendentes" e corrigir um lançamento específico com "editar N
+  campo valor" (funciona local, sem precisar de internet/IA), ou "desfazer"
+  pra tirar só o último.
 
 Manda "preencher" (ou "atualizar") pro bot quando quiser que ele abra o
 navegador (escondido) e lance no Timesheet de verdade tudo que estiver
@@ -198,6 +209,21 @@ def remover_horas(texto: str) -> str:
     return limpar(re.sub(r"\s+", " ", texto))
 
 
+# O Whisper (transcrição de áudio) às vezes ouve errado a palavra "rateio"
+# (ex: "raterio", "rateiro", "ratejo") - aceitamos essas variantes pra não
+# perder o rateio só por causa de um erro de transcrição.
+_PALAVRA_RATEIO = r"(?:rateio|raterio|rateiro|ratejo)"
+
+
+def _tem_negacao_rateio(segmento: str) -> bool:
+    """Detecta "sem rateio", "não tem rateio", "nenhum rateio", etc."""
+    return bool(re.search(
+        rf"\b(?:sem|n[ãa]o|nenhum\w*)\b[^,.;\n]{{0,20}}\b{_PALAVRA_RATEIO}\b"
+        rf"|\b{_PALAVRA_RATEIO}\b[^,.;\n]{{0,20}}\b(?:nenhum\w*)\b",
+        segmento, re.IGNORECASE,
+    ))
+
+
 def extrair_rateio(texto: str) -> Tuple[str, str]:
     """
     Se a mensagem mencionar "rateio" (ex: "... rateio state grid" ou
@@ -206,10 +232,20 @@ def extrair_rateio(texto: str) -> Tuple[str, str]:
     (vírgula/ponto), pra não pegar o resto da frase inteira quando a
     pessoa continua falando depois. Aceita virgula/pontuação logo depois
     da palavra "rateio" (comum quando a pessoa faz uma pausa ao falar).
-    Retorna (texto_do_rateio_ou_vazio, texto_sem_esse_trecho).
+    Se a pessoa disser que não tem rateio ("sem rateio", "não tem rateio"),
+    retorna vazio sem tentar achar nada (isso é uma resposta válida, não
+    uma falha). Retorna (texto_do_rateio_ou_vazio, texto_sem_esse_trecho).
     """
+    m_neg = re.search(
+        rf"\b(?:sem|n[ãa]o|nenhum\w*)\b[^,.;\n]{{0,20}}\b{_PALAVRA_RATEIO}\b"
+        rf"|\b{_PALAVRA_RATEIO}\b[^,.;\n]{{0,20}}\b(?:nenhum\w*)\b",
+        texto, re.IGNORECASE,
+    )
+    if m_neg:
+        return "", limpar(texto[:m_neg.start()] + " " + texto[m_neg.end():])
+
     m = re.search(
-        r"\brateio\b[\s,:;]*(?:é|eh|seria|foi)?[\s,:;]*([^,.;\n]{1,60})",
+        rf"\b{_PALAVRA_RATEIO}\b[\s,:;]*(?:é|eh|seria|foi)?[\s,:;]*([^,.;\n]{{1,60}})",
         texto, re.IGNORECASE,
     )
     if m and limpar(m.group(1)):
@@ -403,18 +439,26 @@ def start(message):
         message,
         "Manda assim: \"4h ADM Marketing\" ou \"3h AGA CT 15140\".\n"
         "Eu já lanço direto (sem precisar confirmar) e te mostro o que "
-        "entendi. Se algo sair errado, manda \"desfazer\" que eu tiro o "
-        "último lançamento.\n\n"
+        "entendi.\n\n"
+        "Também aceito áudio - dita na ordem tempo, centro de custo, "
+        "rateio (se tiver, senão fala \"sem rateio\"), observação - ex: "
+        "\"6 horas, ADM Marketing, sem rateio, revisão de slides\". Eu "
+        "transcrevo e processo igual a uma mensagem de texto.\n\n"
+        "Nada disso vai pro Timesheet de verdade na hora - fica só "
+        "guardado localmente até você mandar \"preencher\". Antes disso, "
+        "você pode conferir e corrigir:\n"
+        "- \"pendentes\" mostra tudo que ainda não foi mandado (funciona "
+        "mesmo sem internet).\n"
+        "- \"editar N campo valor\" corrige um lançamento específico - "
+        "ex: \"editar 2 centro_custo ADM Marketing\" ou \"editar 2 rateio "
+        "sem\".\n"
+        "- \"desfazer\" tira o último lançamento inteiro.\n\n"
         "Se não disser o dia, lanço pra hoje. Pra outro dia, inclua na "
         "mensagem: \"ontem\", \"anteontem\", \"hoje\", \"dia 3\", \"dia 3 "
         "de julho\" ou uma data tipo \"03/07\".\n\n"
         "Quando quiser mandar tudo pro Timesheet de verdade, manda "
         "\"preencher\" - eu abro o navegador escondido e faço sozinho "
-        "(também faço isso sozinho uns segundos depois de eu ligar).\n\n"
-        "Também aceito áudio - manda gravando \"4 horas ontem ADM "
-        "Marketing\" que eu transcrevo e processo igual.\n\n"
-        "Se tiver rateio, menciona na mensagem: \"3h PROPOSTA rateio state "
-        "grid\". Se não achar com certeza, deixo sem rateio e aviso."
+        "(também faço isso sozinho uns segundos depois de eu ligar)."
     )
 
 
@@ -436,6 +480,14 @@ def receber_mensagem(message):
 
     if texto_lower in ("preencher", "atualizar", "/preencher", "/atualizar"):
         threading.Thread(target=preencher_timesheet, args=(message.chat.id,), daemon=True).start()
+        return
+
+    if texto_lower in ("pendentes", "relatorio", "relatório", "lista", "listar", "/pendentes", "/relatorio"):
+        listar_pendentes(message)
+        return
+
+    if texto_lower.startswith("editar"):
+        editar_lancamento(message, texto)
         return
 
     processar_texto_lancamento(message, texto)
@@ -481,27 +533,39 @@ def processar_texto_lancamento(message, texto: str) -> None:
     cai pras regras de texto (extrair_data/extrair_horas/etc) como reserva.
     """
     if _cliente_ia:
-        dados_ia = interpretar_com_ia(texto)
-        resultado = montar_lancamento_da_ia(dados_ia, texto) if dados_ia else None
+        dados_ia = interpretar_com_ia(message, texto)
+        resultado = montar_lancamento_da_ia(dados_ia) if dados_ia else None
 
         if resultado:
-            mes, dia, centro_custo, rateio, horas, observacao = resultado
-            salvar_lancamento(message, mes, dia, centro_custo, 1.0, horas, observacao, rateio, "")
+            mes, dia, centro_custo, score_centro, rateio, rateio_aviso, horas, observacao = resultado
+            salvar_lancamento(message, mes, dia, centro_custo, score_centro, horas, observacao, rateio, rateio_aviso)
             return
 
     processar_texto_lancamento_regras(message, texto)
 
 
-def interpretar_com_ia(texto: str) -> Optional[dict]:
+def interpretar_com_ia(message, texto: str) -> Optional[dict]:
     opcoes_centro = nomes_do_tipo(catalogo, "centro_custo")
     opcoes_rateio = nomes_do_tipo(catalogo, "rateio")
     hoje = date.today()
 
     prompt_sistema = (
         "Você extrai lançamentos de timesheet de mensagens em português, "
-        "faladas ou escritas, que podem ser frases soltas ou narradas "
-        "livremente. Responda APENAS com um JSON (sem texto antes/depois, "
-        "sem markdown), no formato exato:\n"
+        "faladas ou escritas. A pessoa dita SEMPRE nesta ordem: tempo "
+        "(horas) -> centro de custo -> rateio (se tiver, senão fala 'sem "
+        "rateio' ou não fala nada) -> observação. Ex: \"6 horas, ADM "
+        "Marketing, sem rateio, revisão de slides\" ou \"4 horas, "
+        "proposta state grid, rateio state grid, visita técnica\". As "
+        "mensagens vêm de áudio transcrito por outra IA (Whisper), então "
+        "podem ter erros de transcrição - a palavra \"rateio\" às vezes "
+        "vira \"raterio\"/\"rateiro\"/\"ratejo\", e nomes de centro de "
+        "custo podem vir com grafia/acentuação levemente diferentes "
+        "(ex: \"adem marketing\" em vez de \"ADM Marketing\") ou com "
+        "letras trocadas. Use o contexto e a lista de opções abaixo pra "
+        "identificar a opção mais parecida mesmo com esses erros - não "
+        "precisa ser uma cópia perfeita, escolha a mais próxima da lista. "
+        "Responda APENAS com um JSON (sem texto antes/depois, sem "
+        "markdown), no formato exato:\n"
         '{"dia": <numero ou null>, "mes_numero": <1 a 12 ou null>, '
         '"ano": <numero ou null>, "horas": "<HHMM ou null>", '
         '"centro_custo": <string ou null>, "rateio": <string ou null>, '
@@ -511,14 +575,16 @@ def interpretar_com_ia(texto: str) -> Optional[dict]:
         "null (o sistema assume hoje).\n\n"
         "\"horas\" no formato 24h de 4 dígitos, ex: 3 horas e 45 minutos "
         "vira \"0345\", 4 horas vira \"0400\".\n\n"
-        "\"centro_custo\" TEM que ser copiado EXATAMENTE (mesma grafia) de "
-        f"um destes nomes, ou null se não conseguir identificar com "
-        f"confiança:\n{json.dumps(opcoes_centro, ensure_ascii=False)}\n\n"
-        "\"rateio\" TEM que ser copiado EXATAMENTE de um destes nomes, ou "
-        "null se a mensagem não mencionar rateio ou você não tiver "
-        f"confiança:\n{json.dumps(opcoes_rateio, ensure_ascii=False)}\n\n"
-        "\"observacao\" é um resumo curto e limpo do que foi feito, sem "
-        "repetir data/horas/centro de custo/rateio."
+        "\"centro_custo\" deve ser o nome mais parecido (mesmo que não "
+        "seja cópia exata) desta lista, ou null se não achar nada "
+        f"remotamente parecido:\n{json.dumps(opcoes_centro, ensure_ascii=False)}\n\n"
+        "\"rateio\" deve ser o nome mais parecido desta lista, ou null se "
+        "a pessoa disser que não tem rateio (\"sem rateio\", \"não tem "
+        f"rateio\") ou não mencionar rateio:\n{json.dumps(opcoes_rateio, ensure_ascii=False)}\n\n"
+        "\"observacao\" é só a parte que vem DEPOIS do rateio (ou depois "
+        "do centro de custo, se não houver rateio) - um resumo curto e "
+        "limpo do que foi feito, sem repetir data/horas/centro de "
+        "custo/rateio."
     )
 
     try:
@@ -534,24 +600,40 @@ def interpretar_com_ia(texto: str) -> Optional[dict]:
         return json.loads(resposta.choices[0].message.content)
     except Exception as erro:
         print(f"Falha ao interpretar com IA (caindo pras regras de texto): {erro}")
+        try:
+            bot.send_message(
+                message.chat.id,
+                f"⚠️ IA não respondeu agora ({erro}) - usando o modo de regras de texto pra esse lançamento.",
+            )
+        except Exception:
+            pass
         return None
 
 
-def montar_lancamento_da_ia(dados: dict, texto_original: str) -> Optional[Tuple[str, str, str, str, str, str]]:
-    """Valida o JSON que a IA devolveu. Retorna None se faltar algo essencial."""
+def montar_lancamento_da_ia(dados: dict) -> Optional[Tuple[str, str, str, float, str, str, str, str]]:
+    """
+    Valida/finaliza o JSON que a IA devolveu. Em vez de exigir que
+    centro_custo/rateio sejam cópia exata do catálogo (a IA às vezes
+    normaliza acentos/maiúsculas ou herda erros de transcrição do áudio),
+    faz fuzzy-match do que ela devolveu contra o catálogo - assim a gente
+    aproveita o entendimento da IA (que já lida bem com "adem marketing"
+    -> ADM Marketing) e ainda mostra uma confiança de verdade pro usuário,
+    em vez de sempre 100%. Retorna None só se não tiver hora válida ou
+    nenhum centro de custo nem remotamente parecido.
+    """
     horas = dados.get("horas")
     if not horas or not re.match(r"^\d{4}$", str(horas)):
         return None
 
     opcoes_centro = nomes_do_tipo(catalogo, "centro_custo")
-    centro_custo = dados.get("centro_custo")
-    if centro_custo not in opcoes_centro:
+    centro_bruto = limpar(dados.get("centro_custo") or "")
+    centro_custo, score_centro = melhor_correspondencia(opcoes_centro, centro_bruto) if centro_bruto else (None, 0.0)
+    if not centro_custo:
         return None
 
     opcoes_rateio = nomes_do_tipo(catalogo, "rateio")
-    rateio = dados.get("rateio") or ""
-    if rateio and rateio not in opcoes_rateio:
-        rateio = ""  # a IA errou o nome do rateio - ignora (rateio e' opcional)
+    rateio_bruto = limpar(dados.get("rateio") or "")
+    rateio, rateio_aviso = resolver_rateio(rateio_bruto)
 
     hoje = date.today()
     try:
@@ -565,17 +647,31 @@ def montar_lancamento_da_ia(dados: dict, texto_original: str) -> Optional[Tuple[
 
     mes = mes_ano_de(d)
     dia = f"{d.day:02d}"
-    observacao = limpar(dados.get("observacao") or texto_original)
+    observacao = limpar(dados.get("observacao") or "")
 
-    return mes, dia, centro_custo, rateio, str(horas), observacao
+    return mes, dia, centro_custo, score_centro, rateio, rateio_aviso, str(horas), observacao
 
 
 def processar_texto_lancamento_regras(message, texto: str) -> None:
+    """
+    Reserva pra quando a IA não está configurada (ou falhou). Segue o
+    padrão de ditado combinado: tempo, centro de custo, rateio (se
+    houver), observação - cada parte separada por vírgula/pausa. Quando a
+    mensagem tem vírgulas (comum em áudio narrado), usa só o primeiro
+    trecho pra achar o centro de custo (em vez da frase toda, que dilui a
+    confiança do fuzzy-match). Mensagens curtas sem vírgula (ex: "4h ADM
+    Marketing") continuam funcionando como antes.
+    """
     mes, dia, texto_sem_data = extrair_data(texto)
 
     horas = extrair_horas(texto_sem_data)
     if not horas:
-        bot.reply_to(message, "Não achei a quantidade de horas na mensagem. Tenta algo tipo \"4h ADM Marketing\" ou \"4h ontem ADM Marketing\".")
+        bot.reply_to(
+            message,
+            "Não achei a quantidade de horas na mensagem. Dita na ordem: "
+            "tempo, centro de custo, rateio (se tiver), observação - ex: "
+            "\"4 horas, ADM Marketing, sem rateio, reunião de slides\"."
+        )
         return
 
     resto = remover_horas(texto_sem_data)
@@ -583,15 +679,49 @@ def processar_texto_lancamento_regras(message, texto: str) -> None:
         bot.reply_to(message, "Entendi as horas, mas não achei o centro de custo. Manda de novo com o nome dele.")
         return
 
-    rateio_texto, resto = extrair_rateio(resto)
-    if not resto:
-        bot.reply_to(message, "Entendi as horas e o rateio, mas não achei o centro de custo. Manda de novo com o nome dele.")
+    segmentos = [s for s in (limpar(p) for p in resto.split(",")) if s]
+
+    if len(segmentos) >= 2:
+        centro_bruto = segmentos[0]
+        demais = segmentos[1:]
+
+        rateio_texto = ""
+        indice_rateio: Optional[int] = None
+        for i, seg in enumerate(demais):
+            if _tem_negacao_rateio(seg):
+                indice_rateio = i
+                break
+            if re.search(rf"\b{_PALAVRA_RATEIO}\b", seg, re.IGNORECASE):
+                valor, _ = extrair_rateio(seg)
+                if valor:
+                    rateio_texto = valor
+                    indice_rateio = i
+                elif i + 1 < len(demais):
+                    # "rateio" sozinho no proprio trecho - o valor deve
+                    # estar no proximo (pausa logo apos falar a palavra).
+                    rateio_texto = demais[i + 1]
+                    indice_rateio = i + 1
+                else:
+                    indice_rateio = i
+                break
+
+        observacao = ", ".join(
+            seg for i, seg in enumerate(demais)
+            if i != indice_rateio and not re.search(rf"\b{_PALAVRA_RATEIO}\b", seg, re.IGNORECASE)
+        )
+    else:
+        rateio_texto, resto_sem_rateio = extrair_rateio(resto)
+        centro_bruto = resto_sem_rateio
+        observacao = resto_sem_rateio
+
+    if not centro_bruto:
+        bot.reply_to(message, "Entendi as horas, mas não achei o centro de custo. Manda de novo com o nome dele.")
         return
 
     rateio_escolhido, rateio_aviso = resolver_rateio(rateio_texto)
 
     opcoes_centro = nomes_do_tipo(catalogo, "centro_custo")
-    centro_escolhido, score_centro = melhor_correspondencia(opcoes_centro, resto)
+    centro_escolhido, score_centro = melhor_correspondencia(opcoes_centro, centro_bruto)
 
     if not centro_escolhido:
         bot.reply_to(
@@ -601,7 +731,7 @@ def processar_texto_lancamento_regras(message, texto: str) -> None:
         )
         return
 
-    salvar_lancamento(message, mes, dia, centro_escolhido, score_centro, horas, resto, rateio_escolhido, rateio_aviso)
+    salvar_lancamento(message, mes, dia, centro_escolhido, score_centro, horas, observacao, rateio_escolhido, rateio_aviso)
 
 
 def resolver_rateio(rateio_texto: str) -> Tuple[str, str]:
@@ -666,6 +796,10 @@ def salvar_lancamento(message, mes: str, dia: str, centro_custo: str, score_cent
         f"Observação: {observacao}"
         f"{aviso_rateio}"
         f"{aviso_confianca}"
+        f"\n\nSe algo saiu errado, manda \"editar N campo valor\" pra "
+        f"corrigir (veja os números com \"pendentes\") ou \"desfazer\" "
+        f"pra tirar o último. Nada disso vai pro Timesheet de verdade até "
+        f"você mandar \"preencher\"."
     )
 
 
@@ -688,6 +822,157 @@ def desfazer_ultimo(message) -> None:
 
     dia, centro, horas = removida[1], removida[2], removida[6]
     bot.reply_to(message, f"Desfeito: dia {dia}, {centro}, {horas[:2]}:{horas[2:]}h.")
+
+
+CAMPOS_EDITAVEIS = {
+    "hora": "horas", "horas": "horas",
+    "centro": "centro_custo", "centro_custo": "centro_custo", "cc": "centro_custo",
+    "rateio": "rateio",
+    "obs": "observacao", "observacao": "observacao", "observação": "observacao",
+    "dia": "dia",
+}
+
+
+def listar_pendentes(message) -> None:
+    """
+    Mostra tudo que já foi gravado no CSV mas ainda não foi mandado pro
+    Timesheet de verdade (isso some da lista assim que "preencher" roda
+    com sucesso) - funciona só lendo o arquivo local, sem depender de
+    internet/IA, então dá pra conferir e corrigir mesmo offline antes de
+    mandar "preencher".
+    """
+    p = Path(ARQUIVO_LANCAMENTOS)
+    if not p.exists():
+        bot.reply_to(message, "Não tem nenhum lançamento pendente.")
+        return
+
+    with p.open("r", encoding="utf-8-sig", newline="") as f:
+        linhas = list(csv.DictReader(f))
+
+    if not linhas:
+        bot.reply_to(message, "Não tem nenhum lançamento pendente.")
+        return
+
+    texto = "Pendentes (ainda não mandados pro Timesheet):\n"
+    for i, linha in enumerate(linhas, start=1):
+        rateio = f" | Rateio: {linha['rateio']}" if linha.get("rateio") else ""
+        horas = linha["horas"]
+        texto += (
+            f"\n{i}) Dia {linha['dia']} de {linha['mes']} - {linha['centro_custo']}"
+            f"{rateio} - {horas[:2]}:{horas[2:]}h"
+            f"\n   Obs: {linha['observacao']}"
+        )
+
+    texto += (
+        "\n\nPra corrigir algum antes de mandar pro Timesheet, manda "
+        "\"editar N campo valor\" (campos: horas, centro_custo, rateio, "
+        "observacao, dia) - ex: \"editar 2 horas 0430\" ou \"editar 2 "
+        "centro_custo ADM Marketing\" ou \"editar 2 rateio sem\" (tira o "
+        "rateio). Pra apagar o último de todos, manda \"desfazer\"."
+    )
+    bot.reply_to(message, texto)
+
+
+def editar_lancamento(message, texto: str) -> None:
+    """
+    Corrige um campo de um lançamento pendente sem precisar desfazer e
+    ditar tudo de novo - manda "editar N campo valor", onde N é o número
+    mostrado em "pendentes". Só mexe no CSV local (o que ainda não foi
+    preenchido de verdade), então dá pra revisar/ajustar à vontade antes
+    de mandar "preencher".
+    """
+    partes = texto.split(maxsplit=3)
+    if len(partes) < 4 or not partes[1].isdigit():
+        bot.reply_to(
+            message,
+            "Pra editar, manda \"editar N campo valor\" - ex: \"editar 2 "
+            "horas 0430\" ou \"editar 2 centro_custo ADM Marketing\". "
+            "Manda \"pendentes\" pra ver os números."
+        )
+        return
+
+    indice = int(partes[1])
+    campo = CAMPOS_EDITAVEIS.get(limpar(partes[2]).lower())
+    valor = limpar(partes[3])
+
+    if not campo:
+        bot.reply_to(
+            message,
+            f"Não conheço o campo \"{partes[2]}\". Use: horas, centro_custo, "
+            "rateio, observacao ou dia."
+        )
+        return
+
+    p = Path(ARQUIVO_LANCAMENTOS)
+    if not p.exists():
+        bot.reply_to(message, "Não tem nenhum lançamento pendente.")
+        return
+
+    with p.open("r", encoding="utf-8-sig", newline="") as f:
+        linhas = list(csv.reader(f))
+
+    cabecalho, dados = linhas[0], linhas[1:]
+    if indice < 1 or indice > len(dados):
+        bot.reply_to(message, f"Não achei o lançamento número {indice}. Manda \"pendentes\" pra ver a lista.")
+        return
+
+    idx_col = {nome: i for i, nome in enumerate(cabecalho)}
+    linha = dados[indice - 1]
+
+    if campo == "horas":
+        horas_novas = extrair_horas(valor) or (valor if re.match(r"^\d{4}$", valor) else None)
+        if not horas_novas:
+            bot.reply_to(message, "Não entendi essas horas. Manda tipo \"4:30\", \"4h30\" ou \"0430\".")
+            return
+        linha[idx_col["horas"]] = horas_novas
+
+    elif campo == "centro_custo":
+        opcoes_centro = nomes_do_tipo(catalogo, "centro_custo")
+        centro_escolhido, score = melhor_correspondencia(opcoes_centro, valor)
+        if not centro_escolhido:
+            bot.reply_to(message, "Não achei nenhum centro de custo parecido com isso.")
+            return
+        linha[idx_col["centro_custo"]] = centro_escolhido
+        linha[idx_col["centro_custo_busca"]] = busca_para_nome(catalogo, "centro_custo", centro_escolhido)
+
+    elif campo == "rateio":
+        if valor.lower() in ("sem", "nenhum", "remover", "tirar", "limpar", "não", "nao"):
+            linha[idx_col["rateio"]] = ""
+            linha[idx_col["rateio_busca"]] = ""
+        else:
+            rateio_escolhido, _ = resolver_rateio(valor)
+            if not rateio_escolhido:
+                bot.reply_to(
+                    message,
+                    f"Não achei com certeza o rateio \"{valor}\". Tenta um nome "
+                    "mais parecido com o do catálogo."
+                )
+                return
+            linha[idx_col["rateio"]] = rateio_escolhido
+            linha[idx_col["rateio_busca"]] = busca_para_nome(catalogo, "rateio", rateio_escolhido)
+
+    elif campo == "observacao":
+        linha[idx_col["observacao"]] = valor
+
+    elif campo == "dia":
+        if not re.match(r"^\d{1,2}$", valor):
+            bot.reply_to(message, "O dia deve ser só o número, ex: \"editar 2 dia 7\".")
+            return
+        linha[idx_col["dia"]] = f"{int(valor):02d}"
+
+    with p.open("w", newline="", encoding="utf-8-sig") as f:
+        csv.writer(f).writerows([cabecalho] + dados)
+
+    linha_dict = dict(zip(cabecalho, linha))
+    rateio_txt = f" | Rateio: {linha_dict['rateio']}" if linha_dict.get("rateio") else ""
+    horas_dict = linha_dict["horas"]
+    bot.reply_to(
+        message,
+        f"Corrigido, lançamento {indice} agora é:\n"
+        f"Dia {linha_dict['dia']} de {linha_dict['mes']} - {linha_dict['centro_custo']}"
+        f"{rateio_txt} - {horas_dict[:2]}:{horas_dict[2:]}h\n"
+        f"Obs: {linha_dict['observacao']}"
+    )
 
 
 def loop_lembrete() -> None:
