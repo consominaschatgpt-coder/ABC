@@ -109,11 +109,49 @@ def busca_para_nome(catalogo: Dict[str, List[Dict[str, str]]], tipo: str, nome: 
     return termo_busca_padrao(nome)
 
 
+UNIDADES_EXTENSO = {
+    "zero": 0, "um": 1, "uma": 1, "dois": 2, "duas": 2, "tres": 3, "três": 3,
+    "quatro": 4, "cinco": 5, "seis": 6, "sete": 7, "oito": 8, "nove": 9,
+    "dez": 10, "onze": 11, "doze": 12, "treze": 13, "catorze": 14, "quatorze": 14,
+    "quinze": 15, "dezesseis": 16, "dezessete": 17, "dezoito": 18, "dezenove": 19,
+    "vinte": 20,
+}
+DEZENAS_EXTENSO = {"trinta": 30, "quarenta": 40, "cinquenta": 50}
+_PADRAO_NUM_EXTENSO = "|".join(list(DEZENAS_EXTENSO.keys()) + list(UNIDADES_EXTENSO.keys()))
+
+
+def numero_extenso_para_int(texto: str) -> Optional[int]:
+    """Converte "quarenta e cinco", "trinta" ou "quinze" pro numero. Cobre so' 0-59."""
+    texto = limpar(texto).lower()
+
+    if texto in DEZENAS_EXTENSO:
+        return DEZENAS_EXTENSO[texto]
+    if texto in UNIDADES_EXTENSO:
+        return UNIDADES_EXTENSO[texto]
+
+    m = re.match(rf"^({'|'.join(DEZENAS_EXTENSO)})\s+e\s+({'|'.join(UNIDADES_EXTENSO)})$", texto)
+    if m:
+        return DEZENAS_EXTENSO[m.group(1)] + UNIDADES_EXTENSO[m.group(2)]
+
+    return None
+
+
 def extrair_horas(texto: str) -> Optional[str]:
     """
-    Acha uma quantidade de horas na mensagem: "4h", "4:30", "04h30", "8 horas".
-    Retorna no formato "HHMM" (o mesmo que o robo espera), ou None se nao achar.
+    Acha uma quantidade de horas na mensagem: "4h", "4:30", "04h30", "8
+    horas" ou "3 horas e quarenta e cinco minutos". Retorna no formato
+    "HHMM" (o mesmo que o robo espera), ou None se nao achar.
     """
+    m = re.search(
+        rf"(\d{{1,2}})\s*horas?\s+e\s+({_PADRAO_NUM_EXTENSO})(?:\s+e\s+({_PADRAO_NUM_EXTENSO}))?\s*minutos?\b",
+        texto, re.IGNORECASE,
+    )
+    if m:
+        texto_min = m.group(2) + (f" e {m.group(3)}" if m.group(3) else "")
+        minutos = numero_extenso_para_int(texto_min)
+        if minutos is not None:
+            return f"{int(m.group(1)):02d}{minutos:02d}"
+
     m = re.search(r"(\d{1,2})\s*[:h]\s*(\d{2})\b", texto, re.IGNORECASE)
     if m:
         return f"{int(m.group(1)):02d}{m.group(2)}"
@@ -126,6 +164,10 @@ def extrair_horas(texto: str) -> Optional[str]:
 
 
 def remover_horas(texto: str) -> str:
+    texto = re.sub(
+        rf"\d{{1,2}}\s*horas?\s+e\s+(?:{_PADRAO_NUM_EXTENSO})(?:\s+e\s+(?:{_PADRAO_NUM_EXTENSO}))?\s*minutos?\b",
+        " ", texto, flags=re.IGNORECASE,
+    )
     texto = re.sub(r"\d{1,2}\s*[:h]\s*\d{2}\b", " ", texto, flags=re.IGNORECASE)
     texto = re.sub(r"\d{1,2}\s*h(?:oras?)?\b", " ", texto, flags=re.IGNORECASE)
     return limpar(re.sub(r"\s+", " ", texto))
@@ -134,13 +176,15 @@ def remover_horas(texto: str) -> str:
 def extrair_rateio(texto: str) -> Tuple[str, str]:
     """
     Se a mensagem mencionar "rateio" (ex: "... rateio state grid"), extrai
-    o texto depois dessa palavra como a descrição do rateio. Mencione o
-    rateio por último na mensagem (depois do centro de custo). Retorna
+    o texto depois dessa palavra como a descrição do rateio - so' ate' a
+    proxima pontuação (vírgula/ponto), pra não pegar o resto da frase
+    inteira quando a pessoa continua falando depois. Mencione o rateio por
+    último e de forma curta (ex: "rateio state grid"). Retorna
     (texto_do_rateio_ou_vazio, texto_sem_esse_trecho).
     """
-    m = re.search(r"\brateio\b[:\s]*(.*)$", texto, re.IGNORECASE)
+    m = re.search(r"\brateio\b[:\s]*(?:é|eh|seria|foi)?\s*([^,.;\n]{1,60})", texto, re.IGNORECASE)
     if m and limpar(m.group(1)):
-        return limpar(m.group(1)), limpar(texto[:m.start()])
+        return limpar(m.group(1)), limpar(texto[:m.start()] + " " + texto[m.end():])
     return "", texto
 
 
