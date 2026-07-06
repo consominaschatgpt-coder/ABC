@@ -82,6 +82,13 @@ DÚVIDAS FREQUENTES
   -> Rode INSTALAR_INICIO_AUTOMATICO.bat de novo (ele desbloqueia os
      arquivos toda vez que roda).
 
+"Apaguei a pasta antiga, extraí uma nova, e o bot não abriu sozinho
+ quando liguei o PC"
+  -> Normal: o atalho de início automático antigo ficou apontando pra
+     pasta que você apagou. Basta rodar RODAR_BOT.bat manualmente UMA VEZ
+     nesta pasta nova - ele já atualiza o atalho sozinho pra apontar pra
+     cá. No próximo boot, liga sozinho normalmente.
+
 "A sessão de login expirou, o preencher não conseguiu"
   -> Rode RODAR_ROBO.bat manualmente uma vez (abre visível) pra logar de
      novo.
