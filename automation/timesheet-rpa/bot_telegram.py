@@ -2,9 +2,13 @@
 Bot do Telegram para lançar horas no Timesheet por mensagem.
 
 Fluxo:
-- Você manda uma mensagem tipo "4h ADM Marketing" ou "3h AGA CT 15140".
-- O bot acha o Centro de custo mais parecido no catálogo (mesmo algoritmo
-  de comparação usado pelo robo_timesheet_v7.py, via matching.py).
+- Você manda uma mensagem tipo "4h ADM Marketing" ou "3h AGA CT 15140" -
+  pode ser bem mais livre/narrado se a IA estiver configurada (veja abaixo).
+- Se `openai_api_key.txt` existir, o bot usa IA (OpenAI) pra interpretar a
+  mensagem inteira - entende frases soltas, narradas, com rateio no meio,
+  minutos por extenso, etc. Sem esse arquivo, usa só regras de texto fixas
+  (mais simples, funciona melhor com frases curtas e diretas tipo "4h
+  ADM Marketing rateio state grid").
 - Ele devolve o que entendeu e pede confirmação (sim/não).
 - Confirmando, grava uma nova linha em lancamentos_timesheet.csv - o mesmo
   arquivo que o robo_timesheet_v7.py lê para preencher o Timesheet de verdade.
@@ -31,15 +35,19 @@ Limitações desta primeira versão (MVP):
 - Só um preenchimento por vez - se mandar "preencher" de novo enquanto
   o anterior ainda esta rodando, ele avisa e ignora.
 
-Configuração (2 arquivos locais, fora do git - veja README.md):
+Configuração (arquivos locais, fora do git - veja README.md):
 - telegram_token.txt: token do bot, do @BotFather
 - telegram_chat_id.txt: seu chat_id, do @userinfobot (só esse numero usa o bot)
+- openai_api_key.txt (opcional): chave da API da OpenAI, pra usar IA em vez
+  de só regras de texto. Sem esse arquivo, o bot funciona normalmente, só
+  com as regras.
 
 Rodar:
     python bot_telegram.py
 """
 
 import csv
+import json
 import re
 import time as time_module
 import threading
@@ -49,14 +57,18 @@ from typing import Dict, List, Optional, Tuple
 
 import telebot
 from faster_whisper import WhisperModel
+from openai import OpenAI
 
 from matching import limpar, melhor_correspondencia, melhores_correspondencias, termo_busca_padrao, LIMIAR_CONFIANCA
 import robo_timesheet_v7
 
 ARQUIVO_TOKEN = "telegram_token.txt"
 ARQUIVO_CHAT_ID = "telegram_chat_id.txt"
+ARQUIVO_OPENAI_KEY = "openai_api_key.txt"
 ARQUIVO_CATALOGO = "catalogo_opcoes.csv"
 ARQUIVO_LANCAMENTOS = "lancamentos_timesheet.csv"
+
+MODELO_IA = "gpt-4o-mini"  # barato e rapido, suficiente pra esse tipo de extracao
 
 LIMITE_HORAS_SEM_LANCAR = 24  # avisa se passar desse tempo sem nenhum lançamento novo
 ESPERA_AO_LIGAR_SEGUNDOS = 45  # tempo pra receber mensagens em espera antes de preencher sozinho
@@ -82,6 +94,14 @@ def ler_arquivo_config(caminho: str, nome_amigavel: str) -> str:
     # utf-8-sig: no Windows/PowerShell, arquivos de texto costumam ser
     # salvos com um BOM (marca invisivel no inicio); sem isso aqui, o token
     # vinha com esse caractere colado na frente e quebrava o bot.
+    return limpar(p.read_text(encoding="utf-8-sig"))
+
+
+def ler_arquivo_opcional(caminho: str) -> str:
+    """Igual ler_arquivo_config, mas nao quebra o bot se o arquivo nao existir."""
+    p = Path(caminho)
+    if not p.exists():
+        return ""
     return limpar(p.read_text(encoding="utf-8-sig"))
 
 
@@ -305,6 +325,10 @@ def horas_desde_ultimo_lancamento() -> Optional[float]:
 TOKEN = ler_arquivo_config(ARQUIVO_TOKEN, "o token do bot (@BotFather)")
 CHAT_ID_PERMITIDO = ler_arquivo_config(ARQUIVO_CHAT_ID, "seu chat_id (@userinfobot)")
 
+# Opcional: se nao existir, o bot funciona so' com as regras de texto (sem IA).
+OPENAI_API_KEY = ler_arquivo_opcional(ARQUIVO_OPENAI_KEY)
+_cliente_ia = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
+
 bot = telebot.TeleBot(TOKEN)
 catalogo = carregar_catalogo()
 
@@ -452,6 +476,104 @@ def receber_audio(message):
 
 
 def processar_texto_lancamento(message, texto: str) -> None:
+    """
+    Ponto de entrada pra interpretar uma mensagem/audio. Tenta a IA
+    primeiro (se configurada) - ela entende frases livres/narradas bem
+    melhor que as regras de texto. Se a IA nao estiver configurada, falhar
+    (sem internet, chave invalida) ou nao identificar tudo com confianca,
+    cai pras regras de texto (extrair_data/extrair_horas/etc) como reserva.
+    """
+    if _cliente_ia:
+        dados_ia = interpretar_com_ia(texto)
+        resultado = montar_lancamento_da_ia(dados_ia, texto) if dados_ia else None
+
+        if resultado:
+            mes, dia, centro_custo, rateio, horas, observacao = resultado
+            propor_lancamento(message, mes, dia, centro_custo, 1.0, horas, observacao, rateio, "")
+            return
+
+    processar_texto_lancamento_regras(message, texto)
+
+
+def interpretar_com_ia(texto: str) -> Optional[dict]:
+    opcoes_centro = nomes_do_tipo(catalogo, "centro_custo")
+    opcoes_rateio = nomes_do_tipo(catalogo, "rateio")
+    hoje = date.today()
+
+    prompt_sistema = (
+        "Você extrai lançamentos de timesheet de mensagens em português, "
+        "faladas ou escritas, que podem ser frases soltas ou narradas "
+        "livremente. Responda APENAS com um JSON (sem texto antes/depois, "
+        "sem markdown), no formato exato:\n"
+        '{"dia": <numero ou null>, "mes_numero": <1 a 12 ou null>, '
+        '"ano": <numero ou null>, "horas": "<HHMM ou null>", '
+        '"centro_custo": <string ou null>, "rateio": <string ou null>, '
+        '"observacao": "<string>"}\n\n'
+        f"Hoje é dia {hoje.day} de {MESES[hoje.month - 1]} de {hoje.year}. "
+        "Se a mensagem não disser a data, retorne dia/mes_numero/ano como "
+        "null (o sistema assume hoje).\n\n"
+        "\"horas\" no formato 24h de 4 dígitos, ex: 3 horas e 45 minutos "
+        "vira \"0345\", 4 horas vira \"0400\".\n\n"
+        "\"centro_custo\" TEM que ser copiado EXATAMENTE (mesma grafia) de "
+        f"um destes nomes, ou null se não conseguir identificar com "
+        f"confiança:\n{json.dumps(opcoes_centro, ensure_ascii=False)}\n\n"
+        "\"rateio\" TEM que ser copiado EXATAMENTE de um destes nomes, ou "
+        "null se a mensagem não mencionar rateio ou você não tiver "
+        f"confiança:\n{json.dumps(opcoes_rateio, ensure_ascii=False)}\n\n"
+        "\"observacao\" é um resumo curto e limpo do que foi feito, sem "
+        "repetir data/horas/centro de custo/rateio."
+    )
+
+    try:
+        resposta = _cliente_ia.chat.completions.create(
+            model=MODELO_IA,
+            response_format={"type": "json_object"},
+            messages=[
+                {"role": "system", "content": prompt_sistema},
+                {"role": "user", "content": texto},
+            ],
+            timeout=20,
+        )
+        return json.loads(resposta.choices[0].message.content)
+    except Exception as erro:
+        print(f"Falha ao interpretar com IA (caindo pras regras de texto): {erro}")
+        return None
+
+
+def montar_lancamento_da_ia(dados: dict, texto_original: str) -> Optional[Tuple[str, str, str, str, str, str]]:
+    """Valida o JSON que a IA devolveu. Retorna None se faltar algo essencial."""
+    horas = dados.get("horas")
+    if not horas or not re.match(r"^\d{4}$", str(horas)):
+        return None
+
+    opcoes_centro = nomes_do_tipo(catalogo, "centro_custo")
+    centro_custo = dados.get("centro_custo")
+    if centro_custo not in opcoes_centro:
+        return None
+
+    opcoes_rateio = nomes_do_tipo(catalogo, "rateio")
+    rateio = dados.get("rateio") or ""
+    if rateio and rateio not in opcoes_rateio:
+        rateio = ""  # a IA errou o nome do rateio - ignora (rateio e' opcional)
+
+    hoje = date.today()
+    try:
+        d = date(
+            int(dados.get("ano") or hoje.year),
+            int(dados.get("mes_numero") or hoje.month),
+            int(dados.get("dia") or hoje.day),
+        )
+    except (ValueError, TypeError):
+        d = hoje
+
+    mes = mes_ano_de(d)
+    dia = f"{d.day:02d}"
+    observacao = limpar(dados.get("observacao") or texto_original)
+
+    return mes, dia, centro_custo, rateio, str(horas), observacao
+
+
+def processar_texto_lancamento_regras(message, texto: str) -> None:
     mes, dia, texto_sem_data = extrair_data(texto)
 
     horas = extrair_horas(texto_sem_data)

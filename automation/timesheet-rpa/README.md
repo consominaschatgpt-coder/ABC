@@ -133,6 +133,31 @@ acontece uma vez.
 Os dois arquivos (`telegram_token.txt`, `telegram_chat_id.txt`) sao
 ignorados pelo git - sao segredos pessoais, nunca devem ser commitados.
 
+**Opcional: entendimento por IA (bem mais robusto que so regras de texto)**
+
+Sem isso, o bot entende a mensagem usando regras de texto fixas (ex:
+procura "rateio" e pega o que vem depois) - funciona bem pra frases curtas
+e diretas, mas quebra em narracao livre/natural (frases longas, ordem
+diferente, numeros por extenso, etc).
+
+Se voce tiver (ou sua empresa tiver) uma chave de API da OpenAI:
+
+1. Crie o arquivo `openai_api_key.txt` nesta pasta, com só a chave dentro
+   (`sk-proj-...`).
+2. Pronto - o bot passa a usar IA pra interpretar a mensagem inteira,
+   entendendo frases soltas/narradas, rateio no meio da frase, minutos por
+   extenso, etc. Ainda assim so aceita um Centro de custo/Rateio que exista
+   de verdade no `catalogo_opcoes.csv` (a IA nao inventa opcao).
+
+Custo: e' a API paga por uso (nao e' a mesma coisa que uma assinatura de
+chat tipo ChatGPT Plus - e' uma conta separada, em platform.openai.com).
+Pro volume de uma pessoa lancando horas todo dia, o custo e' bem baixo
+(nao chega perto de 1 dolar por mes usando o modelo `gpt-4o-mini`).
+
+Se o arquivo nao existir, ou a chamada pra API falhar por qualquer motivo
+(sem internet, chave invalida, etc), o bot cai automaticamente pras
+regras de texto - nunca trava por causa da IA.
+
 **Rodar:**
 
 ```bash

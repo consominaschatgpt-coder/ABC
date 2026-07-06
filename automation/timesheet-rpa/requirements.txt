@@ -4,3 +4,4 @@ pandas
 openpyxl
 pyTelegramBotAPI
 faster-whisper
+openai
