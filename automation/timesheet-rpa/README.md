@@ -225,13 +225,14 @@ sem pedir confirmacao de seguranca. Pra desfazer, apague o atalho
 `RodarBotTimesheet` em
 `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup`.
 
-Se voce baixar uma pasta/zip nova depois, ela vem com o bloqueio de novo -
-so' rodar `INSTALAR_INICIO_AUTOMATICO.bat` de novo (ou, sem instalar o
-atalho de novo, rodar so' o comando abaixo no PowerShell dentro da pasta):
-
-```powershell
-Get-ChildItem -Path . -Recurse | Unblock-File
-```
+**Importante se voce trocar de pasta** (ex: apagou a pasta antiga e
+extraiu um zip novo em outro lugar): o `RODAR_BOT.bat` agora recria esse
+atalho sozinho (e desbloqueia os arquivos de novo) toda vez que voce roda
+ele na mao - entao, depois de extrair uma pasta nova, so' rodar
+`RODAR_BOT.bat` manualmente **uma vez** ja atualiza o atalho pra apontar
+pra pasta nova. Sem isso, o atalho antigo continuaria apontando pra pasta
+que voce apagou, e o bot nao abriria sozinho no proximo boot (mesmo
+efeito de nao ter instalado nada).
 
 Toda vez que o bot inicia (seja pelo atalho automatico ou manual), ele
 espera `ESPERA_AO_LIGAR_SEGUNDOS` (45s por padrao - da tempo de receber
