@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.routes import auth, contracts, form_templates, organizations, rdas, teams, users
+from app.api.routes import auth, contracts, form_templates, organizations, rdas, reports, teams, users
 from app.core.config import settings
 
 app = FastAPI(title="RDA de Campo API", version="0.1.0")
@@ -22,6 +22,7 @@ app.include_router(users.router)
 app.include_router(form_templates.router)
 app.include_router(form_templates.version_router)
 app.include_router(rdas.router)
+app.include_router(reports.router)
 
 
 @app.get("/health", tags=["health"])

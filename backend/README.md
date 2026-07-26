@@ -149,6 +149,41 @@ criar um RDA — ele não tem acesso a `GET /teams`, que lista todas).
 `localhost:5173`/`127.0.0.1:5173` para o painel web em dev). Ajuste via env
 var `CORS_ORIGINS` ou direto no `.env` para produção.
 
+## Motor de relatórios (Fase 6)
+
+Gera o relatório a partir dos **dados aprovados** (`answers`, já com as
+eventuais correções do coordenador) de um RDA — nunca de rascunhos.
+
+- `GET /reports/rdas/{id}/pdf` / `GET /reports/rdas/{id}/excel` — relatório
+  de um único RDA (exige `status == aprovado`, senão 409)
+- `GET /reports/consolidated?contract_id=&date_from=&date_to=&format=` —
+  consolida todos os RDAs **aprovados** de um contrato (filtro opcional por
+  período de envio); `format` é `pdf`, `excel`, `csv`, `geojson` ou `kmz`
+- `GET/PUT /reports/templates/{contract_id}` (admin escreve; admin/gestor/
+  coordenador leem) — layout HTML (Jinja2) customizado do relatório
+  individual daquele contrato; sem customização, usa o modelo padrão
+  Consominas (`app/services/report_templates_default.py`)
+
+Detalhes de implementação:
+
+- PDF via `xhtml2pdf` (HTML/CSS → PDF, biblioteca 100% Python — sem
+  dependência de sistema como Cairo/Pango, o que facilita rodar em
+  qualquer ambiente).
+- GeoJSON/KMZ extraem coordenadas de campos do tipo `localizacao`
+  respondidos no formato `"lat,lng"` (mesmo formato gravado pelo app
+  mobile).
+- A visibilidade de um relatório segue exatamente a mesma regra de um RDA
+  (`app/services/rda_access.py`, compartilhado com `/rdas`): coordenador só
+  gera relatório das suas equipes, coletor só dos próprios RDAs.
+- Campo calculado no relatório consolidado: total de RDAs no período.
+
+Pendências conhecidas: fotos/assinatura aparecem como texto (referência),
+não como imagem embutida — depende da integração de storage de objetos
+(requisito não-funcional ainda não implementado). O papel `convidado`
+("visualização somente-leitura de relatórios aprovados") ainda não tem
+endpoint dedicado: falta uma tabela de vínculo usuário↔contrato (hoje só
+existe usuário↔equipe) para escopar o que cada convidado pode ver.
+
 ## Papéis (roles)
 
 `admin`, `gestor`, `coordenador`, `coletor`, `convidado` — ver seção 7 da

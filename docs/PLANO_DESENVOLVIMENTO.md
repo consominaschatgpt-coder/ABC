@@ -81,4 +81,5 @@ Baseado em `Especificacao_Tecnica_RDA_Campo.docx` (Grupo Consominas Engenharia).
 - [x] Fase 3 — RDA: submissão, máquina de estados, edição auditada, aprovação/reprovação
 - [x] Fase 4 — painel web (React): login, CRUD, construtor de formulários, RDAs com revisão/aprovação
 - [x] Fase 5 — app mobile Flutter offline-first: SQLite local, formulário dinâmico, fila de sincronização, foto/assinatura/GPS (não testado em emulador/dispositivo real — sem toolchain Android/iOS neste ambiente)
-- [ ] Fase 6 — em andamento
+- [x] Fase 6 — motor de relatórios: PDF/Excel/CSV/GeoJSON/KMZ a partir dos RDAs aprovados, modelo customizável por contrato
+- [ ] Fase 7 — em andamento

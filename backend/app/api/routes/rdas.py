@@ -9,7 +9,6 @@ from app.api.deps import get_current_user, require_roles
 from app.db.session import get_db
 from app.models.form_template import FormTemplateVersion
 from app.models.rda import Rda, RdaAuditAction, RdaAuditLog, RdaStatus
-from app.models.team import team_assignments
 from app.models.user import Role, User
 from app.schemas.rda import (
     RdaAnswersUpdate,
@@ -25,6 +24,12 @@ from app.services.form_validation import (
     validate_answer_values,
     validate_required_fields,
 )
+from app.services.rda_access import (
+    ensure_can_review as _ensure_can_review,
+    ensure_can_view as _ensure_can_view,
+    is_assigned_to_team as _is_assigned_to_team,
+    scope_list_query,
+)
 
 router = APIRouter(prefix="/rdas", tags=["rdas"])
 
@@ -39,43 +44,11 @@ def _get_rda_or_404(db: Session, rda_id: uuid.UUID) -> Rda:
     return rda
 
 
-def _is_assigned_to_team(db: Session, user: User, team_id: uuid.UUID) -> bool:
-    return (
-        db.execute(
-            select(team_assignments).where(
-                team_assignments.c.user_id == user.id,
-                team_assignments.c.team_id == team_id,
-            )
-        ).first()
-        is not None
-    )
-
-
-def _ensure_can_view(db: Session, user: User, rda: Rda) -> None:
-    if user.role in (Role.ADMIN, Role.GESTOR):
-        return
-    if user.role == Role.COORDENADOR and _is_assigned_to_team(db, user, rda.team_id):
-        return
-    if user.role == Role.COLETOR and rda.submitted_by_id == user.id:
-        return
-    raise HTTPException(status_code=403, detail="Voce nao tem acesso a este RDA")
-
-
 def _ensure_can_edit_as_owner(user: User, rda: Rda) -> None:
     if user.role == Role.ADMIN:
         return
     if rda.submitted_by_id != user.id:
         raise HTTPException(status_code=403, detail="Este RDA nao pertence a voce")
-
-
-def _ensure_can_review(db: Session, user: User, rda: Rda) -> None:
-    if user.role == Role.ADMIN:
-        return
-    if user.role == Role.COORDENADOR and _is_assigned_to_team(db, user, rda.team_id):
-        return
-    raise HTTPException(
-        status_code=403, detail="Voce nao e responsavel por esta equipe/contrato"
-    )
 
 
 def _add_audit_log(
@@ -144,19 +117,7 @@ def list_rdas(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> list[Rda]:
-    query = select(Rda)
-
-    if current_user.role in (Role.ADMIN, Role.GESTOR):
-        pass
-    elif current_user.role == Role.COORDENADOR:
-        my_teams = select(team_assignments.c.team_id).where(
-            team_assignments.c.user_id == current_user.id
-        )
-        query = query.where(Rda.team_id.in_(my_teams))
-    elif current_user.role == Role.COLETOR:
-        query = query.where(Rda.submitted_by_id == current_user.id)
-    else:
-        raise HTTPException(status_code=403, detail="Voce nao tem acesso a RDAs")
+    query = scope_list_query(select(Rda), db, current_user)
 
     if status_filter is not None:
         query = query.where(Rda.status == status_filter)
