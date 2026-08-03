@@ -1,0 +1,7 @@
+playwright
+duckdb
+pandas
+openpyxl
+pyTelegramBotAPI
+faster-whisper
+openai

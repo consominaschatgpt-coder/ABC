@@ -1,0 +1,12 @@
+perfil_timesheet/
+perfil_timesheet_robo/
+*.local.csv
+relatorio_execucao.csv
+log_execucao_timesheet.csv
+*.duckdb
+debug_execucao.log
+telegram_token.txt
+telegram_chat_id.txt
+openai_api_key.txt
+*_audio_temp.ogg
+__pycache__/
